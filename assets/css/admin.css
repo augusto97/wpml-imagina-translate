@@ -87,6 +87,10 @@
     color: #00a32a;
 }
 
+.wit-status-pending {
+    color: #dba617;
+}
+
 .wit-status-error {
     color: #d63638;
 }

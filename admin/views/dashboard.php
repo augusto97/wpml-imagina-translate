@@ -92,7 +92,8 @@ if (!defined('ABSPATH')) {
     <?php if ($target_language && !empty($pending_posts)): ?>
         <!-- Posts List -->
         <div class="wit-posts-section">
-            <h2><?php _e('Posts Pendientes de Traducción', 'wpml-imagina-translate'); ?></h2>
+            <h2><?php _e('Posts para Traducción', 'wpml-imagina-translate'); ?></h2>
+            <p class="description"><?php _e('Muestra todos los posts del idioma principal. Los que ya tienen traducción pueden ser re-traducidos.', 'wpml-imagina-translate'); ?></p>
 
             <div class="wit-batch-actions">
                 <button type="button" id="wit-select-all" class="button">
@@ -112,7 +113,7 @@ if (!defined('ABSPATH')) {
                         </td>
                         <th><?php _e('Título', 'wpml-imagina-translate'); ?></th>
                         <th><?php _e('Tipo', 'wpml-imagina-translate'); ?></th>
-                        <th><?php _e('Estado', 'wpml-imagina-translate'); ?></th>
+                        <th><?php _e('Estado Traducción', 'wpml-imagina-translate'); ?></th>
                         <th><?php _e('Acciones', 'wpml-imagina-translate'); ?></th>
                     </tr>
                 </thead>
@@ -127,18 +128,27 @@ if (!defined('ABSPATH')) {
                             </td>
                             <td><?php echo esc_html($post['type']); ?></td>
                             <td>
-                                <span class="wit-status"><?php echo esc_html($post['status']); ?></span>
+                                <?php if ($post['translation_exists']): ?>
+                                    <span class="wit-status-success">✓ <?php _e('Traducido', 'wpml-imagina-translate'); ?></span>
+                                <?php else: ?>
+                                    <span class="wit-status-pending">⚠ <?php _e('Pendiente', 'wpml-imagina-translate'); ?></span>
+                                <?php endif; ?>
                             </td>
                             <td>
                                 <button type="button"
-                                        class="button button-small wit-translate-single"
+                                        class="button button-small button-primary wit-translate-single"
                                         data-post-id="<?php echo esc_attr($post['id']); ?>"
                                         data-target-lang="<?php echo esc_attr($target_language); ?>">
-                                    <?php _e('Traducir Ahora', 'wpml-imagina-translate'); ?>
+                                    <?php echo $post['translation_exists'] ? __('Re-Traducir', 'wpml-imagina-translate') : __('Traducir Ahora', 'wpml-imagina-translate'); ?>
                                 </button>
                                 <a href="<?php echo esc_url($post['edit_url']); ?>" class="button button-small" target="_blank">
                                     <?php _e('Ver Original', 'wpml-imagina-translate'); ?>
                                 </a>
+                                <?php if ($post['translation_exists'] && $post['translation_edit_url']): ?>
+                                    <a href="<?php echo esc_url($post['translation_edit_url']); ?>" class="button button-small" target="_blank">
+                                        <?php _e('Editar Traducción', 'wpml-imagina-translate'); ?>
+                                    </a>
+                                <?php endif; ?>
                             </td>
                         </tr>
                     <?php endforeach; ?>

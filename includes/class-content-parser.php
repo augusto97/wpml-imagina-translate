@@ -1,6 +1,6 @@
 <?php
 /**
- * Content Parser - Handles Gutenberg blocks and content structure
+ * Content Parser - Handles content translation with proper structure preservation
  */
 
 if (!defined('ABSPATH')) {
@@ -9,44 +9,171 @@ if (!defined('ABSPATH')) {
 
 class WIT_Content_Parser {
 
+    private $debug_log = array();
+
     /**
-     * Parse and translate Gutenberg content
+     * Translate content - simple and effective approach
+     * Let the AI handle HTML preservation instead of trying to be too smart
      *
      * @param string $content Post content
      * @param string $target_language Target language code
-     * @return array {content: string, error: string|null}
+     * @param string $source_language Source language code
+     * @return array {content: string, error: string|null, debug: array}
      */
     public function translate_content($content, $target_language, $source_language = '') {
         if (empty($content)) {
             return array(
                 'content' => '',
-                'error' => null
+                'error' => null,
+                'debug' => array('message' => 'Content is empty')
             );
         }
 
-        // Check if content has Gutenberg blocks
-        if (has_blocks($content)) {
-            return $this->translate_blocks($content, $target_language, $source_language);
-        } else {
-            // Classic editor content
-            return $this->translate_classic_content($content, $target_language, $source_language);
+        $this->debug_log[] = 'Original content length: ' . strlen($content) . ' characters';
+        $this->debug_log[] = 'Has Gutenberg blocks: ' . (has_blocks($content) ? 'Yes' : 'No');
+
+        $translator = new WIT_Translator_Engine();
+
+        // Strategy: Translate the ENTIRE content as-is
+        // The AI is smart enough to preserve HTML, Gutenberg blocks, and structure
+        // We just need to chunk it if it's too long
+
+        $max_chunk_size = 15000; // Characters per chunk (safe for most APIs)
+
+        if (strlen($content) > $max_chunk_size) {
+            $this->debug_log[] = 'Content is long, splitting into chunks';
+            return $this->translate_in_chunks($content, $target_language, $source_language, $max_chunk_size);
         }
+
+        // Translate entire content in one go
+        $this->debug_log[] = 'Translating entire content in single request';
+
+        $result = $translator->translate($content, $target_language, $source_language);
+
+        if ($result['error']) {
+            $this->debug_log[] = 'ERROR: ' . $result['error'];
+            return array(
+                'content' => '',
+                'error' => $result['error'],
+                'debug' => $this->debug_log
+            );
+        }
+
+        $this->debug_log[] = 'Translation successful';
+        $this->debug_log[] = 'Translated content length: ' . strlen($result['translation']) . ' characters';
+
+        return array(
+            'content' => $result['translation'],
+            'error' => null,
+            'debug' => $this->debug_log
+        );
     }
 
     /**
-     * Translate Gutenberg blocks
+     * Translate content in chunks for long content
      */
-    private function translate_blocks($content, $target_language, $source_language) {
-        $blocks = parse_blocks($content);
-        $translated_blocks = array();
+    private function translate_in_chunks($content, $target_language, $source_language, $chunk_size) {
         $translator = new WIT_Translator_Engine();
 
-        foreach ($blocks as $block) {
-            $translated_block = $this->translate_block($block, $translator, $target_language, $source_language);
-            $translated_blocks[] = $translated_block;
+        // For Gutenberg, split by blocks
+        if (has_blocks($content)) {
+            return $this->translate_blocks_chunked($content, $target_language, $source_language);
         }
 
-        // Rebuild content from blocks
+        // For classic editor, split by paragraphs
+        $paragraphs = preg_split('/\n\n+/', $content);
+        $chunks = array();
+        $current_chunk = '';
+
+        foreach ($paragraphs as $paragraph) {
+            if (strlen($current_chunk) + strlen($paragraph) > $chunk_size) {
+                if (!empty($current_chunk)) {
+                    $chunks[] = $current_chunk;
+                    $current_chunk = '';
+                }
+            }
+            $current_chunk .= $paragraph . "\n\n";
+        }
+
+        if (!empty($current_chunk)) {
+            $chunks[] = $current_chunk;
+        }
+
+        $this->debug_log[] = 'Split into ' . count($chunks) . ' chunks';
+
+        // Translate each chunk
+        $translated_chunks = array();
+        foreach ($chunks as $index => $chunk) {
+            $this->debug_log[] = 'Translating chunk ' . ($index + 1) . '/' . count($chunks);
+
+            $result = $translator->translate(trim($chunk), $target_language, $source_language);
+
+            if ($result['error']) {
+                $this->debug_log[] = 'ERROR in chunk ' . ($index + 1) . ': ' . $result['error'];
+                // Keep original chunk on error
+                $translated_chunks[] = $chunk;
+            } else {
+                $translated_chunks[] = $result['translation'];
+            }
+        }
+
+        return array(
+            'content' => implode("\n\n", $translated_chunks),
+            'error' => null,
+            'debug' => $this->debug_log
+        );
+    }
+
+    /**
+     * Translate Gutenberg blocks in chunks
+     */
+    private function translate_blocks_chunked($content, $target_language, $source_language) {
+        $translator = new WIT_Translator_Engine();
+        $blocks = parse_blocks($content);
+
+        $this->debug_log[] = 'Found ' . count($blocks) . ' Gutenberg blocks';
+
+        $translated_blocks = array();
+
+        foreach ($blocks as $index => $block) {
+            $this->debug_log[] = 'Processing block ' . ($index + 1) . ': ' . ($block['blockName'] ?? 'freeform');
+
+            // Skip empty blocks
+            if (empty($block['blockName']) && empty($block['innerHTML'])) {
+                $translated_blocks[] = $block;
+                continue;
+            }
+
+            // Skip blocks that shouldn't be translated
+            if (!empty($block['blockName']) && $this->should_skip_block($block['blockName'])) {
+                $this->debug_log[] = 'Skipping block: ' . $block['blockName'];
+                $translated_blocks[] = $block;
+                continue;
+            }
+
+            // Serialize the block back to HTML
+            $block_html = serialize_block($block);
+
+            // Translate the entire block as HTML
+            $result = $translator->translate($block_html, $target_language, $source_language);
+
+            if ($result['error']) {
+                $this->debug_log[] = 'ERROR translating block: ' . $result['error'];
+                // Keep original on error
+                $translated_blocks[] = $block;
+            } else {
+                // Parse the translated HTML back into a block
+                $translated_block_array = parse_blocks($result['translation']);
+                if (!empty($translated_block_array[0])) {
+                    $translated_blocks[] = $translated_block_array[0];
+                } else {
+                    // Fallback: keep original block
+                    $translated_blocks[] = $block;
+                }
+            }
+        }
+
+        // Rebuild content
         $translated_content = '';
         foreach ($translated_blocks as $block) {
             $translated_content .= serialize_block($block);
@@ -54,69 +181,9 @@ class WIT_Content_Parser {
 
         return array(
             'content' => $translated_content,
-            'error' => null
+            'error' => null,
+            'debug' => $this->debug_log
         );
-    }
-
-    /**
-     * Translate single block recursively
-     */
-    private function translate_block($block, $translator, $target_language, $source_language) {
-        if (empty($block['blockName'])) {
-            // HTML or plain text block
-            if (!empty($block['innerHTML'])) {
-                $result = $translator->translate($block['innerHTML'], $target_language, $source_language);
-                if (!$result['error'] && !empty($result['translation'])) {
-                    $block['innerHTML'] = $result['translation'];
-                }
-            }
-            return $block;
-        }
-
-        // Skip blocks that shouldn't be translated
-        if ($this->should_skip_block($block['blockName'])) {
-            return $block;
-        }
-
-        // Translate block attributes
-        if (!empty($block['attrs'])) {
-            $block['attrs'] = $this->translate_block_attributes($block['attrs'], $translator, $target_language, $source_language);
-        }
-
-        // Translate inner HTML
-        if (!empty($block['innerHTML'])) {
-            // Extract translatable text from HTML
-            $translatable_text = $this->extract_translatable_text($block['innerHTML']);
-
-            if (!empty($translatable_text)) {
-                $result = $translator->translate($translatable_text, $target_language, $source_language);
-
-                if (!$result['error'] && !empty($result['translation'])) {
-                    $block['innerHTML'] = $this->replace_translatable_text(
-                        $block['innerHTML'],
-                        $translatable_text,
-                        $result['translation']
-                    );
-                }
-            }
-        }
-
-        // Translate inner blocks recursively
-        if (!empty($block['innerBlocks'])) {
-            $translated_inner_blocks = array();
-            foreach ($block['innerBlocks'] as $inner_block) {
-                $translated_inner_blocks[] = $this->translate_block($inner_block, $translator, $target_language, $source_language);
-            }
-            $block['innerBlocks'] = $translated_inner_blocks;
-        }
-
-        // Rebuild inner content
-        if (!empty($block['innerBlocks'])) {
-            $block['innerContent'] = array();
-            $block['innerContent'][] = $block['innerHTML'];
-        }
-
-        return $block;
     }
 
     /**
@@ -125,116 +192,13 @@ class WIT_Content_Parser {
     private function should_skip_block($block_name) {
         $skip_blocks = array(
             'core/code',
-            'core/preformatted',
             'core/html',
             'core/shortcode',
-            'core/embed',
             'core/separator',
             'core/spacer',
         );
 
         return in_array($block_name, $skip_blocks);
-    }
-
-    /**
-     * Translate block attributes
-     */
-    private function translate_block_attributes($attrs, $translator, $target_language, $source_language) {
-        $translatable_attrs = array('content', 'text', 'title', 'caption', 'citation', 'value', 'placeholder', 'label');
-
-        foreach ($attrs as $key => $value) {
-            if (in_array($key, $translatable_attrs) && is_string($value) && !empty($value)) {
-                $result = $translator->translate($value, $target_language, $source_language);
-                if (!$result['error'] && !empty($result['translation'])) {
-                    $attrs[$key] = $result['translation'];
-                }
-            }
-        }
-
-        return $attrs;
-    }
-
-    /**
-     * Extract translatable text from HTML
-     */
-    private function extract_translatable_text($html) {
-        // Remove HTML tags but preserve structure for later replacement
-        $text = strip_tags($html);
-        $text = trim($text);
-
-        // Don't translate if only whitespace or very short
-        if (strlen($text) < 2) {
-            return '';
-        }
-
-        return $text;
-    }
-
-    /**
-     * Replace translatable text in HTML
-     */
-    private function replace_translatable_text($html, $original_text, $translated_text) {
-        // Simple replacement - preserves HTML structure
-        $original_stripped = strip_tags($original_text);
-        $html_replaced = str_replace($original_stripped, $translated_text, $html);
-
-        return $html_replaced;
-    }
-
-    /**
-     * Translate classic editor content
-     */
-    private function translate_classic_content($content, $target_language, $source_language) {
-        $translator = new WIT_Translator_Engine();
-
-        // Split content by paragraphs to translate in chunks
-        $paragraphs = array_filter(explode("\n\n", $content));
-        $translated_paragraphs = array();
-
-        foreach ($paragraphs as $paragraph) {
-            $paragraph = trim($paragraph);
-
-            if (empty($paragraph)) {
-                $translated_paragraphs[] = $paragraph;
-                continue;
-            }
-
-            // Skip shortcodes and HTML comments
-            if ($this->is_shortcode_or_comment($paragraph)) {
-                $translated_paragraphs[] = $paragraph;
-                continue;
-            }
-
-            $result = $translator->translate($paragraph, $target_language, $source_language);
-
-            if (!$result['error'] && !empty($result['translation'])) {
-                $translated_paragraphs[] = $result['translation'];
-            } else {
-                $translated_paragraphs[] = $paragraph; // Keep original on error
-            }
-        }
-
-        return array(
-            'content' => implode("\n\n", $translated_paragraphs),
-            'error' => null
-        );
-    }
-
-    /**
-     * Check if content is shortcode or HTML comment
-     */
-    private function is_shortcode_or_comment($text) {
-        // Check for shortcodes
-        if (preg_match('/^\[.*\]$/', $text)) {
-            return true;
-        }
-
-        // Check for HTML comments
-        if (preg_match('/^<!--.*-->$/', $text)) {
-            return true;
-        }
-
-        return false;
     }
 
     /**
@@ -275,5 +239,12 @@ class WIT_Content_Parser {
             'excerpt' => $result['translation'],
             'error' => $result['error']
         );
+    }
+
+    /**
+     * Get debug log
+     */
+    public function get_debug_log() {
+        return $this->debug_log;
     }
 }

@@ -23,13 +23,14 @@ class WIT_WPML_Integration {
     }
 
     /**
-     * Get all posts pending translation
+     * Get all posts for translation (including already translated for re-translation)
      *
      * @param string $target_language Target language code
      * @param array $post_types Post types to include
+     * @param bool $only_pending If true, only show posts without translation
      * @return array
      */
-    public function get_pending_translations($target_language = '', $post_types = array('post', 'page')) {
+    public function get_pending_translations($target_language = '', $post_types = array('post', 'page'), $only_pending = false) {
         global $wpdb;
 
         if (empty($target_language)) {
@@ -38,7 +39,7 @@ class WIT_WPML_Integration {
 
         $default_language = $this->get_default_language();
 
-        // Query to get posts that need translation
+        // Query to get ALL posts from default language
         $query = "
             SELECT p.ID, p.post_title, p.post_type, p.post_status
             FROM {$wpdb->posts} p
@@ -47,38 +48,51 @@ class WIT_WPML_Integration {
             AND t.language_code = %s
             AND p.post_status IN ('publish', 'draft')
             AND p.post_type IN (" . implode(',', array_fill(0, count($post_types), '%s')) . ")
-            AND NOT EXISTS (
+        ";
+
+        // Add filter for only pending if requested
+        if ($only_pending) {
+            $query .= " AND NOT EXISTS (
                 SELECT 1 FROM {$wpdb->prefix}icl_translations t2
                 WHERE t2.trid = t.trid
                 AND t2.language_code = %s
-            )
-            ORDER BY p.post_modified DESC
-            LIMIT 100
-        ";
+            )";
+        }
+
+        $query .= " ORDER BY p.post_modified DESC LIMIT 100";
 
         $params = array_merge(
             array($default_language),
-            $post_types,
-            array($target_language)
+            $post_types
         );
+
+        if ($only_pending) {
+            $params[] = $target_language;
+        }
 
         $results = $wpdb->get_results(
             $wpdb->prepare($query, $params)
         );
 
-        $pending_posts = array();
+        $posts = array();
         foreach ($results as $post) {
-            $pending_posts[] = array(
+            // Check if translation exists
+            $translation_id = $this->get_translation_id($post->ID, $target_language);
+
+            $posts[] = array(
                 'id' => $post->ID,
                 'title' => $post->post_title,
                 'type' => $post->post_type,
                 'status' => $post->post_status,
                 'edit_url' => get_edit_post_link($post->ID),
                 'view_url' => get_permalink($post->ID),
+                'translation_exists' => $translation_id ? true : false,
+                'translation_id' => $translation_id,
+                'translation_edit_url' => $translation_id ? get_edit_post_link($translation_id) : '',
             );
         }
 
-        return $pending_posts;
+        return $posts;
     }
 
     /**

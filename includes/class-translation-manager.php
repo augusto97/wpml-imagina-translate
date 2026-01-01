@@ -58,6 +58,9 @@ class WIT_Translation_Manager {
                 $source_language
             );
 
+            // Collect debug info
+            $debug_info = isset($content_result['debug']) ? $content_result['debug'] : array();
+
             if ($content_result['error']) {
                 throw new Exception($content_result['error']);
             }
@@ -101,6 +104,7 @@ class WIT_Translation_Manager {
                         'success' => true,
                         'message' => __('Traducción actualizada exitosamente', 'wpml-imagina-translate'),
                         'translated_post_id' => $existing_translation_id,
+                        'debug' => $debug_info,
                     );
                 } else {
                     throw new Exception(__('Error al actualizar la traducción', 'wpml-imagina-translate'));
@@ -124,6 +128,7 @@ class WIT_Translation_Manager {
                     'success' => true,
                     'message' => __('Traducción creada exitosamente', 'wpml-imagina-translate'),
                     'translated_post_id' => $new_post_id,
+                    'debug' => $debug_info,
                 );
             }
         } catch (Exception $e) {
