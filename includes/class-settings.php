@@ -200,8 +200,10 @@ class WIT_Settings {
                         </th>
                         <td>
                             <select name="<?php echo $this->option_name; ?>[gemini_model]" id="gemini_model" class="regular-text">
-                                <option value="gemini-1.5-pro" <?php selected($settings['gemini_model'], 'gemini-1.5-pro'); ?>>Gemini 1.5 Pro</option>
-                                <option value="gemini-1.5-flash" <?php selected($settings['gemini_model'], 'gemini-1.5-flash'); ?>>Gemini 1.5 Flash (Más rápido)</option>
+                                <option value="gemini-2.5-flash" <?php selected($settings['gemini_model'], 'gemini-2.5-flash'); ?>>Gemini 2.5 Flash (Recomendado - Rápido)</option>
+                                <option value="gemini-2.5-pro" <?php selected($settings['gemini_model'], 'gemini-2.5-pro'); ?>>Gemini 2.5 Pro (Mejor calidad)</option>
+                                <option value="gemini-3-flash-preview" <?php selected($settings['gemini_model'], 'gemini-3-flash-preview'); ?>>Gemini 3 Flash Preview (Más nuevo)</option>
+                                <option value="gemini-3-pro-preview" <?php selected($settings['gemini_model'], 'gemini-3-pro-preview'); ?>>Gemini 3 Pro Preview (Más potente)</option>
                             </select>
                         </td>
                     </tr>
@@ -307,7 +309,7 @@ class WIT_Settings {
             'claude_api_key' => '',
             'claude_model' => 'claude-3-5-sonnet-20241022',
             'gemini_api_key' => '',
-            'gemini_model' => 'gemini-1.5-flash',
+            'gemini_model' => 'gemini-2.5-flash',
             'translation_prompt' => 'Translate the following text to {target_language}. Maintain all HTML tags, formatting, and structure. Only translate the visible text content, not HTML attributes or code.',
             'translate_meta_fields' => true,
             'meta_fields_list' => '_yoast_wpseo_title,_yoast_wpseo_metadesc,_excerpt',

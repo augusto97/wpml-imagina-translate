@@ -158,7 +158,7 @@ class WPML_Imagina_Translate {
             'claude_api_key' => '',
             'claude_model' => 'claude-3-5-sonnet-20241022',
             'gemini_api_key' => '',
-            'gemini_model' => 'gemini-1.5-flash',
+            'gemini_model' => 'gemini-2.5-flash',
             'translation_prompt' => 'Translate the following text to {target_language}. Maintain all HTML tags, formatting, and structure. Only translate the visible text content, not HTML attributes or code.',
             'translate_meta_fields' => true,
             'meta_fields_list' => '_yoast_wpseo_title,_yoast_wpseo_metadesc,_excerpt',

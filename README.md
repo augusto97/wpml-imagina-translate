@@ -95,12 +95,16 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 3. Copia y pega en el plugin
 
 **Modelos recomendados:**
-- `gemini-1.5-flash` - Muy rápido y barato
-- `gemini-1.5-pro` - Mayor capacidad
+- `gemini-2.5-flash` - Muy rápido y barato (Recomendado)
+- `gemini-2.5-pro` - Mayor capacidad y mejor calidad
+- `gemini-3-flash-preview` - Más nuevo (Preview)
+- `gemini-3-pro-preview` - Más potente (Preview)
 
 **Costos aproximados:**
-- Gemini 1.5 Flash: GRATIS hasta 15 req/min
-- Gemini 1.5 Pro: ~$1.25 por millón de tokens
+- Gemini 2.5 Flash: GRATIS hasta 15 req/min
+- Gemini 2.5 Pro: ~$1.25 por millón de tokens
+- Gemini 3 Flash Preview: GRATIS (mientras está en preview)
+- Gemini 3 Pro Preview: GRATIS (mientras está en preview)
 
 ### Configuración Avanzada
 
