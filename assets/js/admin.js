@@ -82,26 +82,41 @@
             const $button = $(this);
             const postId = $button.data('post-id');
             const targetLanguage = $button.data('target-lang');
+            const $row = $button.closest('tr');
 
-            $button.addClass('wit-translating').text(witAdmin.strings.translating);
+            $button.addClass('wit-translating').prop('disabled', true).text(witAdmin.strings.translating);
 
             WitAdmin.translatePost(postId, targetLanguage, function(success, data) {
-                $button.removeClass('wit-translating');
+                $button.removeClass('wit-translating').prop('disabled', false);
 
                 if (success) {
-                    $button.text(witAdmin.strings.success).addClass('button-primary');
-
-                    // Remove from list
-                    $button.closest('tr').fadeOut(500, function() {
-                        $(this).remove();
-                        WitAdmin.updateSelectedCount();
-                    });
-
-                    // Show edit link
-                    if (data.edit_url) {
-                        alert(witAdmin.strings.success + '\n\nPuedes editar la traducción aquí: ' + data.edit_url);
+                    // Show debug log in console
+                    if (data.debug && data.debug.length > 0) {
+                        console.group('Translation Debug Info - Post #' + postId);
+                        data.debug.forEach(function(log) {
+                            console.log(log);
+                        });
+                        console.groupEnd();
                     }
+
+                    $button.text('✓ ' + witAdmin.strings.success).removeClass('button-primary').addClass('button-secondary');
+
+                    // Update row to show translation status
+                    const $statusCell = $row.find('td:eq(2)');
+                    $statusCell.html('<span class="wit-status-success">✓ Traducido</span>');
+
+                    // Add edit translation link if not exists
+                    if (data.edit_url && !$row.find('a[href="' + data.edit_url + '"]').length) {
+                        $button.after('<a href="' + data.edit_url + '" class="button button-small" target="_blank">Editar Traducción</a>');
+                    }
+
+                    // Change button text to Re-Traducir
+                    setTimeout(function() {
+                        $button.text('Re-Traducir').removeClass('button-secondary').addClass('button-primary');
+                    }, 2000);
+
                 } else {
+                    console.error('Translation error:', data.message);
                     $button.text('Error - Reintentar');
                     alert(witAdmin.strings.error + ': ' + (data.message || 'Error desconocido'));
                 }
