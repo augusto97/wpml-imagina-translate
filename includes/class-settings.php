@@ -137,9 +137,10 @@ class WIT_Settings {
                         </th>
                         <td>
                             <select name="<?php echo $this->option_name; ?>[openai_model]" id="openai_model" class="regular-text">
-                                <option value="gpt-4o" <?php selected($settings['openai_model'], 'gpt-4o'); ?>>GPT-4o (Recomendado)</option>
-                                <option value="gpt-4o-mini" <?php selected($settings['openai_model'], 'gpt-4o-mini'); ?>>GPT-4o Mini (Más barato)</option>
-                                <option value="gpt-4-turbo" <?php selected($settings['openai_model'], 'gpt-4-turbo'); ?>>GPT-4 Turbo</option>
+                                <option value="gpt-4o-mini" <?php selected($settings['openai_model'], 'gpt-4o-mini'); ?>>GPT-4o Mini (Recomendado - Más barato)</option>
+                                <option value="gpt-4o" <?php selected($settings['openai_model'], 'gpt-4o'); ?>>GPT-4o (Buena calidad)</option>
+                                <option value="gpt-4o-2024-11-20" <?php selected($settings['openai_model'], 'gpt-4o-2024-11-20'); ?>>GPT-4o (Snapshot Nov 2024)</option>
+                                <option value="o3-mini" <?php selected($settings['openai_model'], 'o3-mini'); ?>>o3-mini (Razonamiento)</option>
                             </select>
                         </td>
                     </tr>
@@ -169,8 +170,9 @@ class WIT_Settings {
                         </th>
                         <td>
                             <select name="<?php echo $this->option_name; ?>[claude_model]" id="claude_model" class="regular-text">
-                                <option value="claude-3-5-sonnet-20241022" <?php selected($settings['claude_model'], 'claude-3-5-sonnet-20241022'); ?>>Claude 3.5 Sonnet (Recomendado)</option>
-                                <option value="claude-3-5-haiku-20241022" <?php selected($settings['claude_model'], 'claude-3-5-haiku-20241022'); ?>>Claude 3.5 Haiku (Más barato)</option>
+                                <option value="claude-haiku-4-5-20251001" <?php selected($settings['claude_model'], 'claude-haiku-4-5-20251001'); ?>>Claude 4.5 Haiku (Recomendado - Rápido y barato)</option>
+                                <option value="claude-sonnet-4-5-20250929" <?php selected($settings['claude_model'], 'claude-sonnet-4-5-20250929'); ?>>Claude 4.5 Sonnet (Mejor coding)</option>
+                                <option value="claude-opus-4-5-20251101" <?php selected($settings['claude_model'], 'claude-opus-4-5-20251101'); ?>>Claude 4.5 Opus (Máxima calidad)</option>
                             </select>
                         </td>
                     </tr>
@@ -307,7 +309,7 @@ class WIT_Settings {
             'openai_api_key' => '',
             'openai_model' => 'gpt-4o-mini',
             'claude_api_key' => '',
-            'claude_model' => 'claude-3-5-sonnet-20241022',
+            'claude_model' => 'claude-haiku-4-5-20251001',
             'gemini_api_key' => '',
             'gemini_model' => 'gemini-2.5-flash',
             'translation_prompt' => 'Translate the following text to {target_language}. Maintain all HTML tags, formatting, and structure. Only translate the visible text content, not HTML attributes or code.',
