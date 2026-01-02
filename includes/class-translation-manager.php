@@ -58,8 +58,31 @@ class WIT_Translation_Manager {
                 $source_language
             );
 
-            // V3 parser provides debug info directly
+            // Collect debug info with extracted strings and translations
             $debug_info = isset($content_result['debug']) ? $content_result['debug'] : array();
+            $extracted_strings = isset($content_result['extracted_strings']) ? $content_result['extracted_strings'] : array();
+            $applied_translations = isset($content_result['translations']) ? $content_result['translations'] : array();
+
+            // Add detailed debug info
+            $debug_info[] = '=== EXTRACTED STRINGS ===';
+            foreach ($extracted_strings as $index => $string_info) {
+                $debug_info[] = sprintf(
+                    '[%d] %s (%s): "%s"',
+                    $index + 1,
+                    $string_info['type'],
+                    $string_info['block_name'],
+                    mb_substr($string_info['text'], 0, 100) . (mb_strlen($string_info['text']) > 100 ? '...' : '')
+                );
+            }
+
+            $debug_info[] = '=== TRANSLATIONS APPLIED ===';
+            foreach ($applied_translations as $index => $translation) {
+                $debug_info[] = sprintf(
+                    '[%d] "%s"',
+                    $index + 1,
+                    mb_substr($translation, 0, 100) . (mb_strlen($translation) > 100 ? '...' : '')
+                );
+            }
 
             if ($content_result['error']) {
                 throw new Exception($content_result['error']);

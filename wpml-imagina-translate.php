@@ -159,7 +159,7 @@ class WPML_Imagina_Translate {
             'claude_model' => 'claude-haiku-4-5-20251001',
             'gemini_api_key' => '',
             'gemini_model' => 'gemini-2.5-flash',
-            'translation_prompt' => 'Translate the following text to {target_language}. Maintain all HTML tags, formatting, and structure. Only translate the visible text content, not HTML attributes or code.',
+            'translation_prompt' => 'Translate the following text to {target_language}. Return ONLY the translated text without any HTML escaping, encoding, or modifications. Do not escape special characters. Do not add \u, \\u, u003c or any Unicode escapes. Return plain text translation exactly as it should appear.',
             'translate_meta_fields' => true,
             'meta_fields_list' => '_yoast_wpseo_title,_yoast_wpseo_metadesc,_excerpt',
             'batch_size' => 5,
