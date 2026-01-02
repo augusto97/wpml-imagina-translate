@@ -69,25 +69,30 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 3. Copia y pega en el plugin
 
 **Modelos recomendados:**
-- `gpt-4o-mini` - Más barato, excelente calidad
-- `gpt-4o` - Mejor calidad, más costoso
+- `gpt-4o-mini` - Recomendado, excelente calidad y barato
+- `gpt-4o` - Buena calidad
+- `gpt-4o-2024-11-20` - Snapshot estable (Noviembre 2024)
+- `o3-mini` - Modelo de razonamiento (para tareas complejas)
 
 **Costos aproximados:**
 - GPT-4o Mini: ~$0.15 por millón de tokens (~$0.01 por página)
 - GPT-4o: ~$2.50 por millón de tokens (~$0.15 por página)
+- o3-mini: ~$1.10 por millón de tokens
 
 #### Anthropic Claude
 1. Ve a [console.anthropic.com](https://console.anthropic.com)
 2. Crea una API key
 3. Copia y pega en el plugin
 
-**Modelos recomendados:**
-- `claude-3-5-haiku-20241022` - Más barato
-- `claude-3-5-sonnet-20241022` - Mejor calidad
+**Modelos recomendados (Serie 4.5 - Nuevos):**
+- `claude-haiku-4-5-20251001` - Recomendado, rápido y barato
+- `claude-sonnet-4-5-20250929` - Mejor modelo de coding del mundo
+- `claude-opus-4-5-20251101` - Máxima calidad e inteligencia
 
 **Costos aproximados:**
-- Claude 3.5 Haiku: ~$1 por millón de tokens (~$0.06 por página)
-- Claude 3.5 Sonnet: ~$3 por millón de tokens (~$0.18 por página)
+- Claude 4.5 Haiku: $1/$5 por millón de tokens (input/output)
+- Claude 4.5 Sonnet: $3/$15 por millón de tokens
+- Claude 4.5 Opus: $5/$25 por millón de tokens (⅓ del precio de Opus 4.1)
 
 #### Google Gemini
 1. Ve a [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)

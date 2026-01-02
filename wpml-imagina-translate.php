@@ -156,7 +156,7 @@ class WPML_Imagina_Translate {
             'openai_api_key' => '',
             'openai_model' => 'gpt-4o-mini',
             'claude_api_key' => '',
-            'claude_model' => 'claude-3-5-sonnet-20241022',
+            'claude_model' => 'claude-haiku-4-5-20251001',
             'gemini_api_key' => '',
             'gemini_model' => 'gemini-2.5-flash',
             'translation_prompt' => 'Translate the following text to {target_language}. Maintain all HTML tags, formatting, and structure. Only translate the visible text content, not HTML attributes or code.',
