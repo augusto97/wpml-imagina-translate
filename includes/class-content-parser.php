@@ -1,7 +1,9 @@
 <?php
 /**
- * Content Parser V2 - Safe text extraction and replacement
- * Uses DOMDocument for proper HTML parsing
+ * Content Parser - DOM-based direct text node translation
+ *
+ * Translates content by manipulating text nodes directly in the DOM.
+ * Never uses str_replace. Updates innerContent (used by serialize_block).
  */
 
 if (!defined('ABSPATH')) {
@@ -11,285 +13,268 @@ if (!defined('ABSPATH')) {
 class WIT_Content_Parser {
 
     private $debug_log = array();
-    private $extracted_strings = array();
+    private $strings_translated = 0;
 
     /**
-     * Extract all translatable strings from content
-     * Returns array of strings WITHOUT translating
-     *
-     * @param string $content
-     * @return array {strings: array, blocks_info: array}
+     * Translate post content
      */
-    public function extract_translatable_strings($content) {
-        $this->extracted_strings = array();
+    public function translate_content($content, $target_language, $source_language = '') {
         $this->debug_log = array();
+        $this->strings_translated = 0;
 
         if (empty($content)) {
             return array(
-                'strings' => array(),
-                'blocks_info' => array(),
+                'content' => '',
+                'error' => null,
                 'debug' => array('Content is empty')
             );
         }
 
         $this->debug_log[] = 'Content length: ' . strlen($content) . ' characters';
 
-        // Check if Gutenberg
+        $translator = new WIT_Translator_Engine();
+
         if (has_blocks($content)) {
             $this->debug_log[] = 'Detected Gutenberg blocks';
-            return $this->extract_from_gutenberg($content);
+            $translated = $this->translate_gutenberg($content, $translator, $target_language, $source_language);
         } else {
             $this->debug_log[] = 'Classic editor content';
-            return $this->extract_from_html($content);
-        }
-    }
-
-    /**
-     * Extract strings from Gutenberg blocks
-     */
-    private function extract_from_gutenberg($content) {
-        $blocks = parse_blocks($content);
-        $strings = array();
-        $blocks_info = array();
-
-        $this->debug_log[] = 'Found ' . count($blocks) . ' blocks';
-
-        foreach ($blocks as $index => $block) {
-            $block_name = $block['blockName'] ?? 'freeform';
-
-            // Skip non-translatable blocks
-            if ($this->should_skip_block($block_name)) {
-                $this->debug_log[] = 'Skipping block: ' . $block_name;
-                continue;
-            }
-
-            $block_strings = $this->extract_from_block($block, $index);
-
-            if (!empty($block_strings)) {
-                $blocks_info[] = array(
-                    'index' => $index,
-                    'name' => $block_name,
-                    'string_count' => count($block_strings),
-                );
-
-                $strings = array_merge($strings, $block_strings);
-            }
+            $translated = $this->translate_html_via_dom($content, $translator, $target_language, $source_language, 'classic');
         }
 
-        $this->debug_log[] = 'Extracted ' . count($strings) . ' translatable strings';
+        $this->debug_log[] = '=== TOTAL STRINGS TRANSLATED: ' . $this->strings_translated . ' ===';
 
         return array(
-            'strings' => $strings,
-            'blocks_info' => $blocks_info,
-            'debug' => $this->debug_log,
-            'original_content' => $content,
-            'blocks' => $blocks
+            'content' => $translated,
+            'error' => null,
+            'debug' => $this->debug_log
         );
     }
 
     /**
-     * Extract strings from a single block
+     * Translate Gutenberg blocks
+     *
+     * Key insight: serialize_block() uses innerContent (NOT innerHTML).
+     * So we must update innerContent entries for translations to persist.
      */
-    private function extract_from_block($block, $block_index) {
-        $strings = array();
+    private function translate_gutenberg($content, $translator, $target_language, $source_language) {
+        $blocks = parse_blocks($content);
+        $this->debug_log[] = 'Found ' . count($blocks) . ' top-level blocks';
 
-        // Extract from block attributes (like alt text, captions, etc.)
-        if (!empty($block['attrs'])) {
-            $translatable_attrs = array('alt', 'caption', 'citation', 'title', 'placeholder', 'label', 'value');
+        foreach ($blocks as &$block) {
+            $this->translate_block_recursive($block, $translator, $target_language, $source_language);
+        }
+        unset($block);
 
-            foreach ($block['attrs'] as $attr_name => $attr_value) {
-                if (in_array($attr_name, $translatable_attrs) && is_string($attr_value) && !empty(trim($attr_value))) {
-                    $strings[] = array(
-                        'text' => $attr_value,
-                        'context' => 'block_' . $block_index . '_attr_' . $attr_name,
-                        'type' => 'attribute',
-                        'block_name' => $block['blockName'] ?? 'freeform'
-                    );
-                }
-            }
+        // Serialize all blocks back to content
+        $result = '';
+        foreach ($blocks as $block) {
+            $result .= serialize_block($block);
         }
 
-        // Extract from innerHTML using DOMDocument
-        if (!empty($block['innerHTML'])) {
-            $html_strings = $this->extract_text_nodes_from_html($block['innerHTML'], 'block_' . $block_index);
-            $strings = array_merge($strings, $html_strings);
-        }
-
-        // Recursive: extract from inner blocks
-        if (!empty($block['innerBlocks'])) {
-            foreach ($block['innerBlocks'] as $inner_index => $inner_block) {
-                $inner_strings = $this->extract_from_block($inner_block, $block_index . '_inner_' . $inner_index);
-                $strings = array_merge($strings, $inner_strings);
-            }
-        }
-
-        return $strings;
+        return $result;
     }
 
     /**
-     * Extract text nodes from HTML using DOMDocument
+     * Recursively translate a single block and its inner blocks
      */
-    private function extract_text_nodes_from_html($html, $context_prefix) {
-        $strings = array();
+    private function translate_block_recursive(&$block, $translator, $target_language, $source_language) {
+        $block_name = $block['blockName'] ?? '';
 
-        if (empty(trim(strip_tags($html)))) {
-            return $strings;
+        // Skip null blocks (whitespace between blocks) and non-translatable blocks
+        if (empty($block_name)) {
+            return;
         }
 
-        // Debug: log original HTML
-        $this->debug_log[] = 'Extracting from HTML: ' . mb_substr($html, 0, 200);
+        if ($this->should_skip_block($block_name)) {
+            $this->debug_log[] = 'Skipping block: ' . $block_name;
+            return;
+        }
 
-        // Use DOMDocument for proper HTML parsing
+        $this->debug_log[] = 'Processing block: ' . $block_name;
+
+        // Translate each string chunk in innerContent
+        // innerContent is an array: strings are HTML, nulls are inner block positions
+        if (!empty($block['innerContent'])) {
+            foreach ($block['innerContent'] as $i => $chunk) {
+                if (!is_string($chunk)) {
+                    continue; // null = inner block placeholder, skip
+                }
+
+                // Only process chunks that have actual text
+                if (empty(trim(strip_tags($chunk)))) {
+                    continue;
+                }
+
+                $translated_chunk = $this->translate_html_via_dom(
+                    $chunk, $translator, $target_language, $source_language, $block_name
+                );
+
+                $block['innerContent'][$i] = $translated_chunk;
+            }
+        }
+
+        // Also update innerHTML for consistency (some plugins may use it)
+        if (!empty($block['innerHTML']) && !empty(trim(strip_tags($block['innerHTML'])))) {
+            // For blocks without inner blocks, innerHTML = innerContent[0]
+            if (empty($block['innerBlocks']) && isset($block['innerContent'][0])) {
+                $block['innerHTML'] = $block['innerContent'][0];
+            }
+        }
+
+        // Translate translatable attributes (alt text, captions, etc.)
+        if (!empty($block['attrs'])) {
+            $block['attrs'] = $this->translate_block_attributes(
+                $block['attrs'], $translator, $target_language, $source_language
+            );
+        }
+
+        // Recurse into inner blocks
+        if (!empty($block['innerBlocks'])) {
+            foreach ($block['innerBlocks'] as &$inner_block) {
+                $this->translate_block_recursive($inner_block, $translator, $target_language, $source_language);
+            }
+            unset($inner_block);
+        }
+    }
+
+    /**
+     * Translate HTML by directly manipulating DOM text nodes
+     *
+     * This is the core function. It:
+     * 1. Parses HTML with DOMDocument
+     * 2. Finds all text nodes (skipping script, style, code, pre)
+     * 3. Translates each text node directly
+     * 4. Serializes DOM back to HTML
+     *
+     * HTML structure is NEVER sent to the AI. Only plain text.
+     */
+    private function translate_html_via_dom($html, $translator, $target_language, $source_language, $context = '') {
+        if (empty(trim(strip_tags($html)))) {
+            return $html;
+        }
+
         libxml_use_internal_errors(true);
-        $dom = new DOMDocument();
-        $dom->loadHTML('<?xml encoding="UTF-8">' . $html, LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD);
+        $dom = new DOMDocument('1.0', 'UTF-8');
+
+        // Wrap content to prevent DOMDocument from adding html/body tags
+        $wrapper_id = 'wit-root-' . uniqid();
+        $wrapped = '<div id="' . $wrapper_id . '">' . $html . '</div>';
+        $dom->loadHTML(
+            '<?xml encoding="UTF-8">' . $wrapped,
+            LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD
+        );
         libxml_clear_errors();
 
         $xpath = new DOMXPath($dom);
 
-        // Extract all text nodes (excluding script, style, code)
-        $text_nodes = $xpath->query('//text()[not(ancestor::script) and not(ancestor::style) and not(ancestor::code)]');
+        // Find text nodes ONLY inside our wrapper, excluding code-like elements
+        $query = '//div[@id="' . $wrapper_id . '"]//text()' .
+                 '[not(ancestor::script)]' .
+                 '[not(ancestor::style)]' .
+                 '[not(ancestor::code)]' .
+                 '[not(ancestor::pre)]' .
+                 '[not(ancestor::textarea)]';
 
-        $this->debug_log[] = 'Found ' . $text_nodes->length . ' text nodes';
+        $text_nodes = $xpath->query($query);
 
-        foreach ($text_nodes as $node_index => $text_node) {
-            $text = trim($text_node->nodeValue);
+        if ($text_nodes === false || $text_nodes->length === 0) {
+            return $html;
+        }
 
-            // Skip empty or very short strings
-            if (strlen($text) < 2) {
-                $this->debug_log[] = '  Skipping short text: "' . $text . '"';
+        $changes_made = 0;
+
+        foreach ($text_nodes as $text_node) {
+            $raw_value = $text_node->nodeValue;
+            $trimmed = trim($raw_value);
+
+            // Skip empty or very short text
+            if (mb_strlen($trimmed) < 2) {
                 continue;
             }
 
-            // Skip if it's just numbers or symbols
-            if (preg_match('/^[\d\s\p{P}]+$/u', $text)) {
-                $this->debug_log[] = '  Skipping symbols/numbers: "' . $text . '"';
+            // Skip if it's only numbers, punctuation, symbols, or whitespace (including &nbsp;)
+            if (preg_match('/^[\d\s\p{P}\p{S}\x{00A0}]+$/u', $trimmed)) {
                 continue;
             }
 
-            $this->debug_log[] = '  Extracted text node #' . $node_index . ': "' . mb_substr($text, 0, 100) . '"';
-
-            $strings[] = array(
-                'text' => $text,
-                'context' => $context_prefix . '_text_' . $node_index,
-                'type' => 'text_node',
-                'block_name' => $context_prefix
+            $this->debug_log[] = sprintf(
+                '  [%s] SEND: "%s"',
+                $context,
+                mb_substr($trimmed, 0, 80) . (mb_strlen($trimmed) > 80 ? '...' : '')
             );
-        }
 
-        return $strings;
-    }
+            $result = $translator->translate($trimmed, $target_language, $source_language);
 
-    /**
-     * Extract from classic HTML content
-     */
-    private function extract_from_html($content) {
-        $strings = $this->extract_text_nodes_from_html($content, 'classic');
+            if (!$result['error'] && !empty($result['translation'])) {
+                // Preserve leading and trailing whitespace from the original node value
+                $leading = '';
+                $trailing = '';
 
-        return array(
-            'strings' => $strings,
-            'blocks_info' => array(),
-            'debug' => $this->debug_log,
-            'original_content' => $content,
-            'blocks' => null
-        );
-    }
+                if (preg_match('/^(\s+)/u', $raw_value, $m)) {
+                    $leading = $m[1];
+                }
+                if (preg_match('/(\s+)$/u', $raw_value, $m)) {
+                    $trailing = $m[1];
+                }
 
-    /**
-     * Translate content using extracted strings and their translations
-     *
-     * @param array $extraction_result Result from extract_translatable_strings()
-     * @param array $translations Array of translated strings (same order as extracted)
-     * @return array {content: string, error: string|null}
-     */
-    public function apply_translations($extraction_result, $translations) {
-        $original_content = $extraction_result['original_content'];
-        $strings = $extraction_result['strings'];
+                // Set the translated text directly on the DOM text node
+                $text_node->nodeValue = $leading . $result['translation'] . $trailing;
+                $changes_made++;
+                $this->strings_translated++;
 
-        if (count($strings) !== count($translations)) {
-            return array(
-                'content' => $original_content,
-                'error' => 'Mismatch between extracted strings and translations count'
-            );
-        }
-
-        $translated_content = $original_content;
-
-        // Simple replacement strategy: replace each original string with translation
-        // Going in reverse order to avoid position shifts
-        for ($i = count($strings) - 1; $i >= 0; $i--) {
-            $original_text = $strings[$i]['text'];
-            $translated_text = $translations[$i];
-
-            if (!empty($translated_text) && $translated_text !== $original_text) {
-                $translated_content = str_replace($original_text, $translated_text, $translated_content);
+                $this->debug_log[] = sprintf(
+                    '  [%s] RECV: "%s"',
+                    $context,
+                    mb_substr($result['translation'], 0, 80) . (mb_strlen($result['translation']) > 80 ? '...' : '')
+                );
+            } elseif ($result['error']) {
+                $this->debug_log[] = sprintf('  [%s] ERROR: %s', $context, $result['error']);
             }
         }
 
-        return array(
-            'content' => $translated_content,
-            'error' => null
-        );
+        // If no changes were made, return original HTML to avoid DOMDocument artifacts
+        if ($changes_made === 0) {
+            return $html;
+        }
+
+        // Extract translated HTML from wrapper
+        $root = $dom->getElementById($wrapper_id);
+        if (!$root) {
+            $this->debug_log[] = '  WARNING: Could not find wrapper, returning original';
+            return $html;
+        }
+
+        $translated_html = '';
+        foreach ($root->childNodes as $child) {
+            $translated_html .= $dom->saveHTML($child);
+        }
+
+        return $translated_html;
     }
 
     /**
-     * Complete translation workflow
+     * Translate block attributes
      */
-    public function translate_content($content, $target_language, $source_language = '') {
-        // Step 1: Extract strings
-        $extraction = $this->extract_translatable_strings($content);
+    private function translate_block_attributes($attrs, $translator, $target_language, $source_language) {
+        $translatable_attrs = array('alt', 'caption', 'citation', 'title', 'placeholder', 'label');
 
-        if (empty($extraction['strings'])) {
-            return array(
-                'content' => $content,
-                'error' => null,
-                'debug' => array_merge($extraction['debug'], array('No translatable strings found'))
-            );
-        }
+        foreach ($attrs as $key => $value) {
+            if (in_array($key, $translatable_attrs) && is_string($value) && !empty(trim($value))) {
+                $result = $translator->translate($value, $target_language, $source_language);
 
-        // Step 2: Translate each string
-        $translator = new WIT_Translator_Engine();
-        $translations = array();
-        $errors = array();
-
-        $this->debug_log[] = '=== TRANSLATING ' . count($extraction['strings']) . ' STRINGS ===';
-
-        foreach ($extraction['strings'] as $index => $string_data) {
-            $original_text = $string_data['text'];
-            $this->debug_log[] = sprintf('[%d] SENDING TO AI: "%s"', $index + 1, mb_substr($original_text, 0, 100));
-
-            $result = $translator->translate($original_text, $target_language, $source_language);
-
-            if ($result['error']) {
-                $errors[] = 'Error translating string ' . ($index + 1) . ': ' . $result['error'];
-                $translations[] = $original_text; // Keep original on error
-                $this->debug_log[] = sprintf('[%d] ERROR: %s', $index + 1, $result['error']);
-            } else {
-                $translations[] = $result['translation'];
-                $this->debug_log[] = sprintf('[%d] AI RESPONSE: "%s"', $index + 1, mb_substr($result['translation'], 0, 100));
+                if (!$result['error'] && !empty($result['translation'])) {
+                    $attrs[$key] = $result['translation'];
+                    $this->strings_translated++;
+                }
             }
         }
 
-        // Step 3: Apply translations
-        $final = $this->apply_translations($extraction, $translations);
-
-        return array(
-            'content' => $final['content'],
-            'error' => !empty($errors) ? implode('; ', $errors) : $final['error'],
-            'debug' => array_merge(
-                $extraction['debug'],
-                array(
-                    'Strings translated: ' . count($translations),
-                    'Errors: ' . count($errors)
-                )
-            ),
-            'extracted_strings' => $extraction['strings'],
-            'translations' => $translations
-        );
+        return $attrs;
     }
 
     /**
-     * Translate title (simple string)
+     * Translate title (simple string, no HTML)
      */
     public function translate_title($title, $target_language, $source_language = '') {
         if (empty($title)) {
@@ -300,7 +285,7 @@ class WIT_Content_Parser {
         $result = $translator->translate($title, $target_language, $source_language);
 
         return array(
-            'title' => $result['translation'],
+            'title' => $result['error'] ? $title : $result['translation'],
             'error' => $result['error']
         );
     }
@@ -317,13 +302,13 @@ class WIT_Content_Parser {
         $result = $translator->translate($excerpt, $target_language, $source_language);
 
         return array(
-            'excerpt' => $result['translation'],
+            'excerpt' => $result['error'] ? $excerpt : $result['translation'],
             'error' => $result['error']
         );
     }
 
     /**
-     * Check if block should be skipped
+     * Check if block should be skipped (no translatable content)
      */
     private function should_skip_block($block_name) {
         $skip_blocks = array(
@@ -333,6 +318,9 @@ class WIT_Content_Parser {
             'core/separator',
             'core/spacer',
             'core/embed',
+            'core/audio',
+            'core/video',
+            'core/file',
         );
 
         return in_array($block_name, $skip_blocks);
