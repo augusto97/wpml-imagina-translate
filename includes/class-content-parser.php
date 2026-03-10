@@ -139,15 +139,13 @@ class WIT_Content_Parser {
     }
 
     /**
-     * Translate HTML by directly manipulating DOM text nodes
+     * Translate HTML by finding text nodes with DOM and applying replacements to original HTML string.
      *
-     * This is the core function. It:
-     * 1. Parses HTML with DOMDocument
-     * 2. Finds all text nodes (skipping script, style, code, pre)
-     * 3. Translates each text node directly
-     * 4. Serializes DOM back to HTML
+     * CRITICAL: We use DOM ONLY for TEXT DETECTION. We NEVER serialize back through DOM
+     * (saveHTML/saveXML alter HTML structure and encoding, breaking Gutenberg block validation).
+     * Instead, we collect original→translated text pairs and str_replace them in the original HTML.
      *
-     * HTML structure is NEVER sent to the AI. Only plain text.
+     * Only plain text is ever sent to the AI. HTML structure is fully preserved.
      */
     private function translate_html_via_dom($html, $translator, $target_language, $source_language, $context = '') {
         if (empty(trim(strip_tags($html)))) {
@@ -182,7 +180,10 @@ class WIT_Content_Parser {
             return $html;
         }
 
-        $changes_made = 0;
+        // Build map: raw_node_value => translated_value
+        // DOM decodes HTML entities in nodeValue (e.g., &amp; → &, &eacute; → é)
+        // We use htmlspecialchars() to re-encode when searching in original HTML
+        $replacements = array();
 
         foreach ($text_nodes as $text_node) {
             $raw_value = $text_node->nodeValue;
@@ -198,6 +199,11 @@ class WIT_Content_Parser {
                 continue;
             }
 
+            // Deduplication: if same raw text already translated, reuse
+            if (array_key_exists($raw_value, $replacements)) {
+                continue;
+            }
+
             $this->debug_log[] = sprintf(
                 '  [%s] SEND: "%s"',
                 $context,
@@ -207,7 +213,7 @@ class WIT_Content_Parser {
             $result = $translator->translate($trimmed, $target_language, $source_language);
 
             if (!$result['error'] && !empty($result['translation'])) {
-                // Preserve leading and trailing whitespace from the original node value
+                // Preserve leading and trailing whitespace from original node value
                 $leading = '';
                 $trailing = '';
 
@@ -218,9 +224,7 @@ class WIT_Content_Parser {
                     $trailing = $m[1];
                 }
 
-                // Set the translated text directly on the DOM text node
-                $text_node->nodeValue = $leading . $result['translation'] . $trailing;
-                $changes_made++;
+                $replacements[$raw_value] = $leading . $result['translation'] . $trailing;
                 $this->strings_translated++;
 
                 $this->debug_log[] = sprintf(
@@ -230,27 +234,44 @@ class WIT_Content_Parser {
                 );
             } elseif ($result['error']) {
                 $this->debug_log[] = sprintf('  [%s] ERROR: %s', $context, $result['error']);
+                // Mark as seen so we don't retry the same text
+                $replacements[$raw_value] = $raw_value;
             }
         }
 
-        // If no changes were made, return original HTML to avoid DOMDocument artifacts
-        if ($changes_made === 0) {
+        if (empty($replacements)) {
             return $html;
         }
 
-        // Extract translated HTML from wrapper
-        $root = $dom->getElementById($wrapper_id);
-        if (!$root) {
-            $this->debug_log[] = '  WARNING: Could not find wrapper, returning original';
-            return $html;
+        // Apply translations directly to the ORIGINAL HTML string.
+        // This guarantees exact HTML structure preservation (no DOM re-serialization artifacts).
+        //
+        // Search strategy:
+        //   1. htmlspecialchars($nodeValue) re-encodes & < > " ' → matches how they appear in HTML
+        //   2. Fallback: try raw nodeValue (for plain UTF-8 text without entities)
+        $result_html = $html;
+        $changes = 0;
+
+        foreach ($replacements as $original => $translated) {
+            if ($original === $translated) {
+                continue; // Error case: keep original
+            }
+
+            // htmlspecialchars only encodes &, <, >, ", ' — never touches UTF-8 multibyte chars
+            $search  = htmlspecialchars($original,   ENT_HTML5, 'UTF-8');
+            $replace = htmlspecialchars($translated,  ENT_HTML5, 'UTF-8');
+
+            if (strpos($result_html, $search) !== false) {
+                $result_html = str_replace($search, $replace, $result_html);
+                $changes++;
+            } elseif ($search !== $original && strpos($result_html, $original) !== false) {
+                // Fallback: text was stored as raw UTF-8 (no entity encoding needed)
+                $result_html = str_replace($original, $translated, $result_html);
+                $changes++;
+            }
         }
 
-        $translated_html = '';
-        foreach ($root->childNodes as $child) {
-            $translated_html .= $dom->saveHTML($child);
-        }
-
-        return $translated_html;
+        return $changes > 0 ? $result_html : $html;
     }
 
     /**

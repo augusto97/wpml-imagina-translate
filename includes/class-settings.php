@@ -136,12 +136,23 @@ class WIT_Settings {
                             <label for="openai_model"><?php _e('Modelo OpenAI', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <select name="<?php echo $this->option_name; ?>[openai_model]" id="openai_model" class="regular-text">
-                                <option value="gpt-4o-mini" <?php selected($settings['openai_model'], 'gpt-4o-mini'); ?>>GPT-4o Mini (Recomendado - Más barato)</option>
-                                <option value="gpt-4o" <?php selected($settings['openai_model'], 'gpt-4o'); ?>>GPT-4o (Buena calidad)</option>
-                                <option value="gpt-4o-2024-11-20" <?php selected($settings['openai_model'], 'gpt-4o-2024-11-20'); ?>>GPT-4o (Snapshot Nov 2024)</option>
-                                <option value="o3-mini" <?php selected($settings['openai_model'], 'o3-mini'); ?>>o3-mini (Razonamiento)</option>
-                            </select>
+                            <datalist id="openai_model_list">
+                                <option value="gpt-4o-mini">GPT-4o Mini (Rápido y barato)</option>
+                                <option value="gpt-4o">GPT-4o (Buena calidad)</option>
+                                <option value="gpt-4.1">GPT-4.1</option>
+                                <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
+                                <option value="o3">o3 (Razonamiento)</option>
+                                <option value="o3-mini">o3-mini (Razonamiento rápido)</option>
+                                <option value="o4-mini">o4-mini</option>
+                            </datalist>
+                            <input type="text"
+                                   name="<?php echo $this->option_name; ?>[openai_model]"
+                                   id="openai_model"
+                                   value="<?php echo esc_attr($settings['openai_model']); ?>"
+                                   list="openai_model_list"
+                                   class="regular-text"
+                                   placeholder="gpt-4o-mini">
+                            <p class="description"><?php _e('Selecciona o escribe el ID exacto del modelo. Ver modelos disponibles en', 'wpml-imagina-translate'); ?> <a href="https://platform.openai.com/docs/models" target="_blank">platform.openai.com/docs/models</a></p>
                         </td>
                     </tr>
                 </table>
@@ -169,11 +180,19 @@ class WIT_Settings {
                             <label for="claude_model"><?php _e('Modelo Claude', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <select name="<?php echo $this->option_name; ?>[claude_model]" id="claude_model" class="regular-text">
-                                <option value="claude-haiku-4-5-20251001" <?php selected($settings['claude_model'], 'claude-haiku-4-5-20251001'); ?>>Claude 4.5 Haiku (Recomendado - Rápido y barato)</option>
-                                <option value="claude-sonnet-4-5-20250929" <?php selected($settings['claude_model'], 'claude-sonnet-4-5-20250929'); ?>>Claude 4.5 Sonnet (Mejor coding)</option>
-                                <option value="claude-opus-4-5-20251101" <?php selected($settings['claude_model'], 'claude-opus-4-5-20251101'); ?>>Claude 4.5 Opus (Máxima calidad)</option>
-                            </select>
+                            <datalist id="claude_model_list">
+                                <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (Rápido y barato)</option>
+                                <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (Recomendado)</option>
+                                <option value="claude-opus-4-6">Claude Opus 4.6 (Máxima calidad)</option>
+                            </datalist>
+                            <input type="text"
+                                   name="<?php echo $this->option_name; ?>[claude_model]"
+                                   id="claude_model"
+                                   value="<?php echo esc_attr($settings['claude_model']); ?>"
+                                   list="claude_model_list"
+                                   class="regular-text"
+                                   placeholder="claude-haiku-4-5-20251001">
+                            <p class="description"><?php _e('Selecciona o escribe el ID exacto del modelo. Ver modelos disponibles en', 'wpml-imagina-translate'); ?> <a href="https://docs.anthropic.com/en/docs/about-claude/models" target="_blank">docs.anthropic.com/en/docs/about-claude/models</a></p>
                         </td>
                     </tr>
                 </table>
@@ -201,12 +220,20 @@ class WIT_Settings {
                             <label for="gemini_model"><?php _e('Modelo Gemini', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <select name="<?php echo $this->option_name; ?>[gemini_model]" id="gemini_model" class="regular-text">
-                                <option value="gemini-2.5-flash" <?php selected($settings['gemini_model'], 'gemini-2.5-flash'); ?>>Gemini 2.5 Flash (Recomendado - Rápido)</option>
-                                <option value="gemini-2.5-pro" <?php selected($settings['gemini_model'], 'gemini-2.5-pro'); ?>>Gemini 2.5 Pro (Mejor calidad)</option>
-                                <option value="gemini-3-flash-preview" <?php selected($settings['gemini_model'], 'gemini-3-flash-preview'); ?>>Gemini 3 Flash Preview (Más nuevo)</option>
-                                <option value="gemini-3-pro-preview" <?php selected($settings['gemini_model'], 'gemini-3-pro-preview'); ?>>Gemini 3 Pro Preview (Más potente)</option>
-                            </select>
+                            <datalist id="gemini_model_list">
+                                <option value="gemini-2.5-flash">Gemini 2.5 Flash (Rápido)</option>
+                                <option value="gemini-2.5-pro">Gemini 2.5 Pro (Mejor calidad)</option>
+                                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
+                                <option value="gemini-2.0-flash-thinking-exp">Gemini 2.0 Flash Thinking</option>
+                            </datalist>
+                            <input type="text"
+                                   name="<?php echo $this->option_name; ?>[gemini_model]"
+                                   id="gemini_model"
+                                   value="<?php echo esc_attr($settings['gemini_model']); ?>"
+                                   list="gemini_model_list"
+                                   class="regular-text"
+                                   placeholder="gemini-2.5-flash">
+                            <p class="description"><?php _e('Selecciona o escribe el ID exacto del modelo. Ver modelos disponibles en', 'wpml-imagina-translate'); ?> <a href="https://ai.google.dev/gemini-api/docs/models/gemini" target="_blank">ai.google.dev/gemini-api/docs/models</a></p>
                         </td>
                     </tr>
                 </table>
