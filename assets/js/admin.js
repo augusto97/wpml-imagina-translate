@@ -254,9 +254,89 @@
         }
     };
 
+    // -----------------------------------------------------------------------
+    // Dynamic model loader for Settings page
+    // Queries each provider's real /models endpoint and populates the datalist
+    // -----------------------------------------------------------------------
+    const WitModels = {
+        init: function() {
+            $(document).on('click', '.wit-load-models', this.loadModels);
+        },
+
+        loadModels: function(e) {
+            e.preventDefault();
+
+            const $btn      = $(this);
+            const provider  = $btn.data('provider');
+            const keyField  = $btn.data('key-field');
+            const listId    = $btn.data('list');
+            const inputId   = $btn.data('input');
+            const $status   = $btn.siblings('.wit-models-status');
+
+            // Read the API key from the password field
+            const apiKey = $('#' + keyField).val().trim();
+
+            if (!apiKey) {
+                $status.css('color', '#cc0000').text('Introduce la API key primero.');
+                return;
+            }
+
+            $btn.prop('disabled', true).text('Cargando...');
+            $status.css('color', '#666').text('');
+
+            $.ajax({
+                url: witAdmin.ajax_url,
+                type: 'POST',
+                data: {
+                    action: 'wit_fetch_models',
+                    nonce: witAdmin.nonce,
+                    provider: provider,
+                    api_key: apiKey
+                },
+                success: function(response) {
+                    $btn.prop('disabled', false).text('↻ Cargar modelos');
+
+                    if (!response.success) {
+                        $status.css('color', '#cc0000').text('Error: ' + (response.data.message || 'Error desconocido'));
+                        return;
+                    }
+
+                    const models = response.data.models;
+                    if (!models || models.length === 0) {
+                        $status.css('color', '#cc0000').text('No se encontraron modelos.');
+                        return;
+                    }
+
+                    // Populate datalist with real models from the API
+                    const $list = $('#' + listId);
+                    $list.empty();
+                    models.forEach(function(model) {
+                        const label = model.name !== model.id ? model.name + ' (' + model.id + ')' : model.id;
+                        $list.append($('<option>').val(model.id).text(label));
+                    });
+
+                    // If current input value is empty or stale, set first model as default
+                    const $input = $('#' + inputId);
+                    const currentVal = $input.val().trim();
+                    const modelIds = models.map(function(m) { return m.id; });
+                    if (!currentVal || !modelIds.includes(currentVal)) {
+                        // Suggest the first model but don't force it
+                    }
+
+                    $status.css('color', '#007017').text(models.length + ' modelos disponibles. Selecciona uno del dropdown.');
+                },
+                error: function(xhr, status, error) {
+                    $btn.prop('disabled', false).text('↻ Cargar modelos');
+                    $status.css('color', '#cc0000').text('Error de red: ' + error);
+                }
+            });
+        }
+    };
+
     // Initialize on document ready
     $(document).ready(function() {
         WitAdmin.init();
+        WitModels.init();
     });
 
 })(jQuery);

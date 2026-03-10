@@ -19,8 +19,9 @@ class WIT_Admin_Ajax {
     }
 
     private function __construct() {
-        add_action('wp_ajax_wit_translate_post', array($this, 'ajax_translate_post'));
+        add_action('wp_ajax_wit_translate_post',  array($this, 'ajax_translate_post'));
         add_action('wp_ajax_wit_test_connection', array($this, 'ajax_test_connection'));
+        add_action('wp_ajax_wit_fetch_models',    array($this, 'ajax_fetch_models'));
     }
 
     /**
@@ -73,6 +74,32 @@ class WIT_Admin_Ajax {
                 'message' => $result['message'],
                 'debug' => $debug,
             ));
+        }
+    }
+
+    /**
+     * AJAX handler for fetching available models from a provider
+     */
+    public function ajax_fetch_models() {
+        $this->verify_nonce();
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('No tienes permisos', 'wpml-imagina-translate')));
+        }
+
+        $provider = isset($_POST['provider']) ? sanitize_text_field($_POST['provider']) : '';
+        $api_key  = isset($_POST['api_key'])  ? sanitize_text_field($_POST['api_key'])  : '';
+
+        if (empty($provider) || empty($api_key)) {
+            wp_send_json_error(array('message' => __('Proveedor y API key requeridos', 'wpml-imagina-translate')));
+        }
+
+        $result = WIT_Translator_Engine::fetch_models($provider, $api_key);
+
+        if ($result['success']) {
+            wp_send_json_success(array('models' => $result['models']));
+        } else {
+            wp_send_json_error(array('message' => $result['error']));
         }
     }
 
