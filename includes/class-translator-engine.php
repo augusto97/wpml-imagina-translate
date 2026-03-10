@@ -91,63 +91,55 @@ class WIT_Translator_Engine {
      * Translate using OpenAI API
      */
     private function translate_openai($text, $prompt) {
+        return $this->call_openai_chat($text, $prompt, true);
+    }
+
+    private function call_openai_chat($text, $prompt, $with_temperature) {
+        $body = array(
+            'model'    => $this->model,
+            'messages' => array(
+                array('role' => 'system', 'content' => $prompt),
+                array('role' => 'user',   'content' => $text),
+            ),
+        );
+
+        if ($with_temperature) {
+            $body['temperature'] = 0.3;
+        }
+
         $response = wp_remote_post('https://api.openai.com/v1/chat/completions', array(
             'timeout' => 60,
             'headers' => array(
-                'Content-Type' => 'application/json',
+                'Content-Type'  => 'application/json',
                 'Authorization' => 'Bearer ' . $this->api_key,
             ),
-            'body' => json_encode(array(
-                'model' => $this->model,
-                'messages' => array(
-                    array(
-                        'role' => 'system',
-                        'content' => $prompt
-                    ),
-                    array(
-                        'role' => 'user',
-                        'content' => $text
-                    )
-                ),
-                'temperature' => 0.3,
-            )),
+            'body' => json_encode($body),
         ));
 
         if (is_wp_error($response)) {
-            return array(
-                'translation' => '',
-                'error' => $response->get_error_message()
-            );
+            return array('translation' => '', 'error' => $response->get_error_message());
         }
 
-        $raw_body = wp_remote_retrieve_body($response);
-        $body = json_decode($raw_body, true);
+        $decoded = json_decode(wp_remote_retrieve_body($response), true);
 
         if (json_last_error() !== JSON_ERROR_NONE) {
-            return array(
-                'translation' => '',
-                'error' => 'OpenAI JSON error: ' . json_last_error_msg()
-            );
+            return array('translation' => '', 'error' => 'OpenAI JSON error: ' . json_last_error_msg());
         }
 
-        if (isset($body['error'])) {
-            return array(
-                'translation' => '',
-                'error' => $body['error']['message']
-            );
+        // If the model rejects temperature, retry once without it
+        if (isset($decoded['error'])) {
+            $msg = $decoded['error']['message'] ?? '';
+            if ($with_temperature && strpos($msg, 'temperature') !== false) {
+                return $this->call_openai_chat($text, $prompt, false);
+            }
+            return array('translation' => '', 'error' => $msg);
         }
 
-        if (!isset($body['choices'][0]['message']['content'])) {
-            return array(
-                'translation' => '',
-                'error' => __('Respuesta inválida de OpenAI', 'wpml-imagina-translate')
-            );
+        if (!isset($decoded['choices'][0]['message']['content'])) {
+            return array('translation' => '', 'error' => __('Respuesta inválida de OpenAI', 'wpml-imagina-translate'));
         }
 
-        return array(
-            'translation' => trim($body['choices'][0]['message']['content']),
-            'error' => null
-        );
+        return array('translation' => trim($decoded['choices'][0]['message']['content']), 'error' => null);
     }
 
     /**
