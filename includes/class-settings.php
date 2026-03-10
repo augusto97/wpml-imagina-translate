@@ -136,23 +136,21 @@ class WIT_Settings {
                             <label for="openai_model"><?php _e('Modelo OpenAI', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <datalist id="openai_model_list">
-                                <option value="gpt-4o-mini">GPT-4o Mini (Rápido y barato)</option>
-                                <option value="gpt-4o">GPT-4o (Buena calidad)</option>
-                                <option value="gpt-4.1">GPT-4.1</option>
-                                <option value="gpt-4.1-mini">GPT-4.1 Mini</option>
-                                <option value="o3">o3 (Razonamiento)</option>
-                                <option value="o3-mini">o3-mini (Razonamiento rápido)</option>
-                                <option value="o4-mini">o4-mini</option>
-                            </datalist>
+                            <datalist id="openai_model_list"></datalist>
                             <input type="text"
                                    name="<?php echo $this->option_name; ?>[openai_model]"
                                    id="openai_model"
                                    value="<?php echo esc_attr($settings['openai_model']); ?>"
                                    list="openai_model_list"
-                                   class="regular-text"
+                                   class="regular-text wit-model-input"
+                                   data-provider="openai"
+                                   data-key-field="openai_api_key"
                                    placeholder="gpt-4o-mini">
-                            <p class="description"><?php _e('Selecciona o escribe el ID exacto del modelo. Ver modelos disponibles en', 'wpml-imagina-translate'); ?> <a href="https://platform.openai.com/docs/models" target="_blank">platform.openai.com/docs/models</a></p>
+                            <button type="button" class="button wit-load-models" data-provider="openai" data-key-field="openai_api_key" data-list="openai_model_list" data-input="openai_model">
+                                ↻ <?php _e('Cargar modelos', 'wpml-imagina-translate'); ?>
+                            </button>
+                            <span class="wit-models-status"></span>
+                            <p class="description"><?php _e('Escribe el ID del modelo o haz clic en "Cargar modelos" para obtener la lista actualizada desde la API.', 'wpml-imagina-translate'); ?></p>
                         </td>
                     </tr>
                 </table>
@@ -180,19 +178,21 @@ class WIT_Settings {
                             <label for="claude_model"><?php _e('Modelo Claude', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <datalist id="claude_model_list">
-                                <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (Rápido y barato)</option>
-                                <option value="claude-sonnet-4-6">Claude Sonnet 4.6 (Recomendado)</option>
-                                <option value="claude-opus-4-6">Claude Opus 4.6 (Máxima calidad)</option>
-                            </datalist>
+                            <datalist id="claude_model_list"></datalist>
                             <input type="text"
                                    name="<?php echo $this->option_name; ?>[claude_model]"
                                    id="claude_model"
                                    value="<?php echo esc_attr($settings['claude_model']); ?>"
                                    list="claude_model_list"
-                                   class="regular-text"
+                                   class="regular-text wit-model-input"
+                                   data-provider="claude"
+                                   data-key-field="claude_api_key"
                                    placeholder="claude-haiku-4-5-20251001">
-                            <p class="description"><?php _e('Selecciona o escribe el ID exacto del modelo. Ver modelos disponibles en', 'wpml-imagina-translate'); ?> <a href="https://docs.anthropic.com/en/docs/about-claude/models" target="_blank">docs.anthropic.com/en/docs/about-claude/models</a></p>
+                            <button type="button" class="button wit-load-models" data-provider="claude" data-key-field="claude_api_key" data-list="claude_model_list" data-input="claude_model">
+                                ↻ <?php _e('Cargar modelos', 'wpml-imagina-translate'); ?>
+                            </button>
+                            <span class="wit-models-status"></span>
+                            <p class="description"><?php _e('Escribe el ID del modelo o haz clic en "Cargar modelos" para obtener la lista actualizada desde la API.', 'wpml-imagina-translate'); ?></p>
                         </td>
                     </tr>
                 </table>
@@ -220,20 +220,21 @@ class WIT_Settings {
                             <label for="gemini_model"><?php _e('Modelo Gemini', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <datalist id="gemini_model_list">
-                                <option value="gemini-2.5-flash">Gemini 2.5 Flash (Rápido)</option>
-                                <option value="gemini-2.5-pro">Gemini 2.5 Pro (Mejor calidad)</option>
-                                <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                                <option value="gemini-2.0-flash-thinking-exp">Gemini 2.0 Flash Thinking</option>
-                            </datalist>
+                            <datalist id="gemini_model_list"></datalist>
                             <input type="text"
                                    name="<?php echo $this->option_name; ?>[gemini_model]"
                                    id="gemini_model"
                                    value="<?php echo esc_attr($settings['gemini_model']); ?>"
                                    list="gemini_model_list"
-                                   class="regular-text"
+                                   class="regular-text wit-model-input"
+                                   data-provider="gemini"
+                                   data-key-field="gemini_api_key"
                                    placeholder="gemini-2.5-flash">
-                            <p class="description"><?php _e('Selecciona o escribe el ID exacto del modelo. Ver modelos disponibles en', 'wpml-imagina-translate'); ?> <a href="https://ai.google.dev/gemini-api/docs/models/gemini" target="_blank">ai.google.dev/gemini-api/docs/models</a></p>
+                            <button type="button" class="button wit-load-models" data-provider="gemini" data-key-field="gemini_api_key" data-list="gemini_model_list" data-input="gemini_model">
+                                ↻ <?php _e('Cargar modelos', 'wpml-imagina-translate'); ?>
+                            </button>
+                            <span class="wit-models-status"></span>
+                            <p class="description"><?php _e('Escribe el ID del modelo o haz clic en "Cargar modelos" para obtener la lista actualizada desde la API.', 'wpml-imagina-translate'); ?></p>
                         </td>
                     </tr>
                 </table>

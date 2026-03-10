@@ -316,6 +316,158 @@ class WIT_Translator_Engine {
     }
 
     /**
+     * Fetch available models from provider API
+     *
+     * Calls each provider's real /models endpoint so the list is always up to date.
+     * Returns array of {id, name} objects sorted alphabetically.
+     *
+     * @param string $provider  'openai' | 'claude' | 'gemini'
+     * @param string $api_key   API key for that provider
+     * @return array {success: bool, models: array, error: string}
+     */
+    public static function fetch_models($provider, $api_key) {
+        if (empty($api_key)) {
+            return array('success' => false, 'models' => array(), 'error' => __('API key requerida', 'wpml-imagina-translate'));
+        }
+
+        switch ($provider) {
+            case 'openai':
+                return self::fetch_models_openai($api_key);
+            case 'claude':
+                return self::fetch_models_claude($api_key);
+            case 'gemini':
+                return self::fetch_models_gemini($api_key);
+            default:
+                return array('success' => false, 'models' => array(), 'error' => __('Proveedor no reconocido', 'wpml-imagina-translate'));
+        }
+    }
+
+    private static function fetch_models_openai($api_key) {
+        $response = wp_remote_get('https://api.openai.com/v1/models', array(
+            'timeout' => 15,
+            'headers' => array(
+                'Authorization' => 'Bearer ' . $api_key,
+            ),
+        ));
+
+        if (is_wp_error($response)) {
+            return array('success' => false, 'models' => array(), 'error' => $response->get_error_message());
+        }
+
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+
+        if (json_last_error() !== JSON_ERROR_NONE || !isset($body['data'])) {
+            $msg = isset($body['error']['message']) ? $body['error']['message'] : __('Respuesta inválida de OpenAI', 'wpml-imagina-translate');
+            return array('success' => false, 'models' => array(), 'error' => $msg);
+        }
+
+        // Filter to chat-capable models only (exclude embeddings, whisper, dall-e, tts, etc.)
+        $chat_prefixes = array('gpt-', 'o1', 'o3', 'o4', 'chatgpt');
+        $exclude_suffix = array('instruct', 'embedding', 'similarity', 'search', 'edit', 'insert', 'audio', 'realtime');
+
+        $models = array();
+        foreach ($body['data'] as $model) {
+            $id = $model['id'];
+            $lower = strtolower($id);
+
+            $is_chat = false;
+            foreach ($chat_prefixes as $prefix) {
+                if (strpos($lower, $prefix) === 0) {
+                    $is_chat = true;
+                    break;
+                }
+            }
+            if (!$is_chat) continue;
+
+            $excluded = false;
+            foreach ($exclude_suffix as $suffix) {
+                if (strpos($lower, $suffix) !== false) {
+                    $excluded = true;
+                    break;
+                }
+            }
+            if ($excluded) continue;
+
+            $models[] = array('id' => $id, 'name' => $id);
+        }
+
+        usort($models, function($a, $b) { return strcmp($a['id'], $b['id']); });
+
+        return array('success' => true, 'models' => $models, 'error' => null);
+    }
+
+    private static function fetch_models_claude($api_key) {
+        $response = wp_remote_get('https://api.anthropic.com/v1/models', array(
+            'timeout' => 15,
+            'headers' => array(
+                'x-api-key' => $api_key,
+                'anthropic-version' => '2023-06-01',
+            ),
+        ));
+
+        if (is_wp_error($response)) {
+            return array('success' => false, 'models' => array(), 'error' => $response->get_error_message());
+        }
+
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+
+        if (json_last_error() !== JSON_ERROR_NONE || !isset($body['data'])) {
+            $msg = isset($body['error']['message']) ? $body['error']['message'] : __('Respuesta inválida de Anthropic', 'wpml-imagina-translate');
+            return array('success' => false, 'models' => array(), 'error' => $msg);
+        }
+
+        $models = array();
+        foreach ($body['data'] as $model) {
+            $models[] = array(
+                'id'   => $model['id'],
+                'name' => isset($model['display_name']) ? $model['display_name'] : $model['id'],
+            );
+        }
+
+        usort($models, function($a, $b) { return strcmp($a['id'], $b['id']); });
+
+        return array('success' => true, 'models' => $models, 'error' => null);
+    }
+
+    private static function fetch_models_gemini($api_key) {
+        $response = wp_remote_get(
+            'https://generativelanguage.googleapis.com/v1beta/models?key=' . $api_key,
+            array('timeout' => 15)
+        );
+
+        if (is_wp_error($response)) {
+            return array('success' => false, 'models' => array(), 'error' => $response->get_error_message());
+        }
+
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+
+        if (json_last_error() !== JSON_ERROR_NONE || !isset($body['models'])) {
+            $msg = isset($body['error']['message']) ? $body['error']['message'] : __('Respuesta inválida de Gemini', 'wpml-imagina-translate');
+            return array('success' => false, 'models' => array(), 'error' => $msg);
+        }
+
+        $models = array();
+        foreach ($body['models'] as $model) {
+            // Only include models that support generateContent (text generation)
+            $methods = isset($model['supportedGenerationMethods']) ? $model['supportedGenerationMethods'] : array();
+            if (!in_array('generateContent', $methods)) continue;
+
+            // model name is like "models/gemini-2.5-flash" — extract just the ID
+            $id = isset($model['name']) ? str_replace('models/', '', $model['name']) : '';
+            if (empty($id)) continue;
+
+            $models[] = array(
+                'id'   => $id,
+                'name' => isset($model['displayName']) ? $model['displayName'] : $id,
+            );
+        }
+
+        usort($models, function($a, $b) { return strcmp($a['id'], $b['id']); });
+
+        return array('success' => true, 'models' => $models, 'error' => null);
+    }
+
+    /**
      * Test API connection
      */
     public function test_connection() {
