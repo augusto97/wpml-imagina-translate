@@ -91,26 +91,28 @@ class WIT_Translator_Engine {
      * Translate using OpenAI API
      */
     private function translate_openai($text, $prompt) {
+        // Reasoning models (o1, o3, o4 series) do not support temperature
+        $supports_temperature = !preg_match('/^o\d/i', $this->model);
+
+        $body = array(
+            'model'    => $this->model,
+            'messages' => array(
+                array('role' => 'system', 'content' => $prompt),
+                array('role' => 'user',   'content' => $text),
+            ),
+        );
+
+        if ($supports_temperature) {
+            $body['temperature'] = 0.3;
+        }
+
         $response = wp_remote_post('https://api.openai.com/v1/chat/completions', array(
             'timeout' => 60,
             'headers' => array(
-                'Content-Type' => 'application/json',
+                'Content-Type'  => 'application/json',
                 'Authorization' => 'Bearer ' . $this->api_key,
             ),
-            'body' => json_encode(array(
-                'model' => $this->model,
-                'messages' => array(
-                    array(
-                        'role' => 'system',
-                        'content' => $prompt
-                    ),
-                    array(
-                        'role' => 'user',
-                        'content' => $text
-                    )
-                ),
-                'temperature' => 0.3,
-            )),
+            'body' => json_encode($body),
         ));
 
         if (is_wp_error($response)) {
