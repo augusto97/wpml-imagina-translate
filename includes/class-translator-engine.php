@@ -120,7 +120,15 @@ class WIT_Translator_Engine {
             );
         }
 
-        $body = json_decode(wp_remote_retrieve_body($response), true);
+        $raw_body = wp_remote_retrieve_body($response);
+        $body = json_decode($raw_body, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return array(
+                'translation' => '',
+                'error' => 'OpenAI JSON error: ' . json_last_error_msg()
+            );
+        }
 
         if (isset($body['error'])) {
             return array(
@@ -173,7 +181,15 @@ class WIT_Translator_Engine {
             );
         }
 
-        $body = json_decode(wp_remote_retrieve_body($response), true);
+        $raw_body = wp_remote_retrieve_body($response);
+        $body = json_decode($raw_body, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return array(
+                'translation' => '',
+                'error' => 'Claude JSON error: ' . json_last_error_msg()
+            );
+        }
 
         if (isset($body['error'])) {
             return array(
@@ -230,7 +246,15 @@ class WIT_Translator_Engine {
             );
         }
 
-        $body = json_decode(wp_remote_retrieve_body($response), true);
+        $raw_body = wp_remote_retrieve_body($response);
+        $body = json_decode($raw_body, true);
+
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            return array(
+                'translation' => '',
+                'error' => 'Gemini JSON error: ' . json_last_error_msg()
+            );
+        }
 
         if (isset($body['error'])) {
             return array(

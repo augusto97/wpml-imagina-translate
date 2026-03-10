@@ -106,8 +106,16 @@
                     $statusCell.html('<span class="wit-status-success">✓ Traducido</span>');
 
                     // Add edit translation link if not exists
-                    if (data.edit_url && !$row.find('a[href="' + data.edit_url + '"]').length) {
-                        $button.after('<a href="' + data.edit_url + '" class="button button-small" target="_blank">Editar Traducción</a>');
+                    if (data.edit_url) {
+                        var existingLinks = $row.find('.wit-edit-translation-link');
+                        if (existingLinks.length === 0) {
+                            var $editLink = $('<a>')
+                                .attr('href', data.edit_url)
+                                .attr('target', '_blank')
+                                .addClass('button button-small wit-edit-translation-link')
+                                .text('Editar Traducción');
+                            $button.after($editLink);
+                        }
                     }
 
                     // Change button text to Re-Traducir
@@ -116,6 +124,14 @@
                     }, 2000);
 
                 } else {
+                    // Show debug log on error too
+                    if (data.debug && data.debug.length > 0) {
+                        console.group('Translation Debug (ERROR) - Post #' + postId);
+                        data.debug.forEach(function(log) {
+                            console.log(log);
+                        });
+                        console.groupEnd();
+                    }
                     console.error('Translation error:', data.message);
                     $button.text('Error - Reintentar');
                     alert(witAdmin.strings.error + ': ' + (data.message || 'Error desconocido'));
