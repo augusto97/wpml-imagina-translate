@@ -22,6 +22,42 @@ class WIT_Settings {
     private function __construct() {
         add_action('admin_menu', array($this, 'add_settings_page'));
         add_action('admin_init', array($this, 'register_settings'));
+        add_action('admin_enqueue_scripts', array($this, 'enqueue_assets'));
+    }
+
+    /**
+     * Enqueue JS/CSS on the settings page
+     */
+    public function enqueue_assets($hook) {
+        if ($hook !== 'settings_page_wpml-imagina-translate-settings') {
+            return;
+        }
+
+        wp_enqueue_style(
+            'wit-admin-css',
+            WIT_PLUGIN_URL . 'assets/css/admin.css',
+            array(),
+            WIT_VERSION
+        );
+
+        wp_enqueue_script(
+            'wit-admin-js',
+            WIT_PLUGIN_URL . 'assets/js/admin.js',
+            array('jquery'),
+            WIT_VERSION,
+            true
+        );
+
+        wp_localize_script('wit-admin-js', 'witAdmin', array(
+            'ajax_url' => admin_url('admin-ajax.php'),
+            'nonce'    => wp_create_nonce('wit_ajax_nonce'),
+            'strings'  => array(
+                'translating'    => __('Traduciendo...', 'wpml-imagina-translate'),
+                'success'        => __('Traducción completada', 'wpml-imagina-translate'),
+                'error'          => __('Error en la traducción', 'wpml-imagina-translate'),
+                'confirm_batch'  => __('¿Está seguro de que desea traducir los posts seleccionados?', 'wpml-imagina-translate'),
+            ),
+        ));
     }
 
     /**
