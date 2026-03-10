@@ -172,21 +172,24 @@ class WIT_Settings {
                             <label for="openai_model"><?php _e('Modelo OpenAI', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <datalist id="openai_model_list"></datalist>
-                            <input type="text"
-                                   name="<?php echo $this->option_name; ?>[openai_model]"
-                                   id="openai_model"
-                                   value="<?php echo esc_attr($settings['openai_model']); ?>"
-                                   list="openai_model_list"
-                                   class="regular-text wit-model-input"
-                                   data-provider="openai"
-                                   data-key-field="openai_api_key"
-                                   placeholder="gpt-4o-mini">
-                            <button type="button" class="button wit-load-models" data-provider="openai" data-key-field="openai_api_key" data-list="openai_model_list" data-input="openai_model">
-                                ↻ <?php _e('Cargar modelos', 'wpml-imagina-translate'); ?>
+                            <select name="<?php echo $this->option_name; ?>[openai_model]"
+                                    id="openai_model"
+                                    class="regular-text wit-model-select"
+                                    data-provider="openai"
+                                    data-key-field="openai_api_key"
+                                    data-saved="<?php echo esc_attr($settings['openai_model']); ?>">
+                                <option value="<?php echo esc_attr($settings['openai_model']); ?>" selected>
+                                    <?php echo esc_html($settings['openai_model'] ?: __('— Carga la lista para seleccionar —', 'wpml-imagina-translate')); ?>
+                                </option>
+                            </select>
+                            <button type="button" class="button wit-refresh-models"
+                                    data-target="openai_model"
+                                    data-provider="openai"
+                                    data-key-field="openai_api_key">
+                                ↻ <?php _e('Actualizar lista', 'wpml-imagina-translate'); ?>
                             </button>
                             <span class="wit-models-status"></span>
-                            <p class="description"><?php _e('Escribe el ID del modelo o haz clic en "Cargar modelos" para obtener la lista actualizada desde la API.', 'wpml-imagina-translate'); ?></p>
+                            <p class="description"><?php _e('La lista se carga automáticamente al abrir esta página si hay una API key guardada.', 'wpml-imagina-translate'); ?></p>
                         </td>
                     </tr>
                 </table>
@@ -214,21 +217,24 @@ class WIT_Settings {
                             <label for="claude_model"><?php _e('Modelo Claude', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <datalist id="claude_model_list"></datalist>
-                            <input type="text"
-                                   name="<?php echo $this->option_name; ?>[claude_model]"
-                                   id="claude_model"
-                                   value="<?php echo esc_attr($settings['claude_model']); ?>"
-                                   list="claude_model_list"
-                                   class="regular-text wit-model-input"
-                                   data-provider="claude"
-                                   data-key-field="claude_api_key"
-                                   placeholder="claude-haiku-4-5-20251001">
-                            <button type="button" class="button wit-load-models" data-provider="claude" data-key-field="claude_api_key" data-list="claude_model_list" data-input="claude_model">
-                                ↻ <?php _e('Cargar modelos', 'wpml-imagina-translate'); ?>
+                            <select name="<?php echo $this->option_name; ?>[claude_model]"
+                                    id="claude_model"
+                                    class="regular-text wit-model-select"
+                                    data-provider="claude"
+                                    data-key-field="claude_api_key"
+                                    data-saved="<?php echo esc_attr($settings['claude_model']); ?>">
+                                <option value="<?php echo esc_attr($settings['claude_model']); ?>" selected>
+                                    <?php echo esc_html($settings['claude_model'] ?: __('— Carga la lista para seleccionar —', 'wpml-imagina-translate')); ?>
+                                </option>
+                            </select>
+                            <button type="button" class="button wit-refresh-models"
+                                    data-target="claude_model"
+                                    data-provider="claude"
+                                    data-key-field="claude_api_key">
+                                ↻ <?php _e('Actualizar lista', 'wpml-imagina-translate'); ?>
                             </button>
                             <span class="wit-models-status"></span>
-                            <p class="description"><?php _e('Escribe el ID del modelo o haz clic en "Cargar modelos" para obtener la lista actualizada desde la API.', 'wpml-imagina-translate'); ?></p>
+                            <p class="description"><?php _e('La lista se carga automáticamente al abrir esta página si hay una API key guardada.', 'wpml-imagina-translate'); ?></p>
                         </td>
                     </tr>
                 </table>
@@ -256,21 +262,24 @@ class WIT_Settings {
                             <label for="gemini_model"><?php _e('Modelo Gemini', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <datalist id="gemini_model_list"></datalist>
-                            <input type="text"
-                                   name="<?php echo $this->option_name; ?>[gemini_model]"
-                                   id="gemini_model"
-                                   value="<?php echo esc_attr($settings['gemini_model']); ?>"
-                                   list="gemini_model_list"
-                                   class="regular-text wit-model-input"
-                                   data-provider="gemini"
-                                   data-key-field="gemini_api_key"
-                                   placeholder="gemini-2.5-flash">
-                            <button type="button" class="button wit-load-models" data-provider="gemini" data-key-field="gemini_api_key" data-list="gemini_model_list" data-input="gemini_model">
-                                ↻ <?php _e('Cargar modelos', 'wpml-imagina-translate'); ?>
+                            <select name="<?php echo $this->option_name; ?>[gemini_model]"
+                                    id="gemini_model"
+                                    class="regular-text wit-model-select"
+                                    data-provider="gemini"
+                                    data-key-field="gemini_api_key"
+                                    data-saved="<?php echo esc_attr($settings['gemini_model']); ?>">
+                                <option value="<?php echo esc_attr($settings['gemini_model']); ?>" selected>
+                                    <?php echo esc_html($settings['gemini_model'] ?: __('— Carga la lista para seleccionar —', 'wpml-imagina-translate')); ?>
+                                </option>
+                            </select>
+                            <button type="button" class="button wit-refresh-models"
+                                    data-target="gemini_model"
+                                    data-provider="gemini"
+                                    data-key-field="gemini_api_key">
+                                ↻ <?php _e('Actualizar lista', 'wpml-imagina-translate'); ?>
                             </button>
                             <span class="wit-models-status"></span>
-                            <p class="description"><?php _e('Escribe el ID del modelo o haz clic en "Cargar modelos" para obtener la lista actualizada desde la API.', 'wpml-imagina-translate'); ?></p>
+                            <p class="description"><?php _e('La lista se carga automáticamente al abrir esta página si hay una API key guardada.', 'wpml-imagina-translate'); ?></p>
                         </td>
                     </tr>
                 </table>

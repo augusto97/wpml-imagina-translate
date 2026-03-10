@@ -256,77 +256,107 @@
 
     // -----------------------------------------------------------------------
     // Dynamic model loader for Settings page
-    // Queries each provider's real /models endpoint and populates the datalist
+    // Populates <select> elements with real models from each provider's API.
+    // Auto-loads on page open if an API key is already saved.
     // -----------------------------------------------------------------------
     const WitModels = {
+
         init: function() {
-            $(document).on('click', '.wit-load-models', this.loadModels);
+            // Auto-load models for every provider that already has a key saved
+            $('.wit-model-select').each(function() {
+                const $select   = $(this);
+                const keyField  = $select.data('key-field');
+                const apiKey    = $('#' + keyField).val().trim();
+                if (apiKey) {
+                    WitModels.load($select);
+                }
+            });
+
+            // Manual refresh button
+            $(document).on('click', '.wit-refresh-models', function(e) {
+                e.preventDefault();
+                const targetId = $(this).data('target');
+                WitModels.load($('#' + targetId));
+            });
         },
 
-        loadModels: function(e) {
-            e.preventDefault();
-
-            const $btn      = $(this);
-            const provider  = $btn.data('provider');
-            const keyField  = $btn.data('key-field');
-            const listId    = $btn.data('list');
-            const inputId   = $btn.data('input');
-            const $status   = $btn.siblings('.wit-models-status');
-
-            // Read the API key from the password field
-            const apiKey = $('#' + keyField).val().trim();
+        /**
+         * Load models from the API and populate the <select>.
+         * @param {jQuery} $select  The .wit-model-select element
+         */
+        load: function($select) {
+            const provider  = $select.data('provider');
+            const keyField  = $select.data('key-field');
+            const savedVal  = $select.data('saved');
+            const $status   = $select.siblings('.wit-models-status');
+            const $btn      = $select.siblings('.wit-refresh-models');
+            const apiKey    = $('#' + keyField).val().trim();
 
             if (!apiKey) {
-                $status.css('color', '#cc0000').text('Introduce la API key primero.');
+                $status.css('color', '#cc0000').text('Introduce la API key primero y guarda los ajustes.');
                 return;
             }
 
             $btn.prop('disabled', true).text('Cargando...');
-            $status.css('color', '#666').text('');
+            $select.prop('disabled', true);
+            $status.css('color', '#666').text('Consultando API...');
 
             $.ajax({
                 url: witAdmin.ajax_url,
                 type: 'POST',
+                timeout: 20000,
                 data: {
-                    action: 'wit_fetch_models',
-                    nonce: witAdmin.nonce,
+                    action:   'wit_fetch_models',
+                    nonce:    witAdmin.nonce,
                     provider: provider,
-                    api_key: apiKey
+                    api_key:  apiKey
                 },
                 success: function(response) {
-                    $btn.prop('disabled', false).text('↻ Cargar modelos');
+                    $btn.prop('disabled', false).text('↻ Actualizar lista');
+                    $select.prop('disabled', false);
 
                     if (!response.success) {
-                        $status.css('color', '#cc0000').text('Error: ' + (response.data.message || 'Error desconocido'));
+                        $status.css('color', '#cc0000').text('Error: ' + (response.data ? response.data.message : 'Error desconocido'));
                         return;
                     }
 
                     const models = response.data.models;
                     if (!models || models.length === 0) {
-                        $status.css('color', '#cc0000').text('No se encontraron modelos.');
+                        $status.css('color', '#cc0000').text('No se encontraron modelos para este proveedor.');
                         return;
                     }
 
-                    // Populate datalist with real models from the API
-                    const $list = $('#' + listId);
-                    $list.empty();
+                    // Rebuild <select> options with the full model list
+                    $select.empty();
+                    var currentVal = savedVal || '';
+                    var matched = false;
+
                     models.forEach(function(model) {
-                        const label = model.name !== model.id ? model.name + ' (' + model.id + ')' : model.id;
-                        $list.append($('<option>').val(model.id).text(label));
+                        var label = (model.name && model.name !== model.id)
+                            ? model.name + '  (' + model.id + ')'
+                            : model.id;
+                        var $opt = $('<option>').val(model.id).text(label);
+                        if (model.id === currentVal) {
+                            $opt.prop('selected', true);
+                            matched = true;
+                        }
+                        $select.append($opt);
                     });
 
-                    // If current input value is empty or stale, set first model as default
-                    const $input = $('#' + inputId);
-                    const currentVal = $input.val().trim();
-                    const modelIds = models.map(function(m) { return m.id; });
-                    if (!currentVal || !modelIds.includes(currentVal)) {
-                        // Suggest the first model but don't force it
+                    // If the previously saved model is no longer in the list, add it at the top
+                    if (!matched && currentVal) {
+                        $select.prepend(
+                            $('<option>').val(currentVal).prop('selected', true)
+                                .text(currentVal + ' (guardado — puede estar deprecado)')
+                        );
                     }
 
-                    $status.css('color', '#007017').text(models.length + ' modelos disponibles. Selecciona uno del dropdown.');
+                    $status.css('color', '#007017')
+                           .text(models.length + ' modelos disponibles.');
                 },
                 error: function(xhr, status, error) {
-                    $btn.prop('disabled', false).text('↻ Cargar modelos');
+                    $btn.prop('disabled', false).text('↻ Actualizar lista');
+                    $select.prop('disabled', false);
                     $status.css('color', '#cc0000').text('Error de red: ' + error);
                 }
             });
