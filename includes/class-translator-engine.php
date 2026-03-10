@@ -361,27 +361,30 @@ class WIT_Translator_Engine {
             return array('success' => false, 'models' => array(), 'error' => $msg);
         }
 
-        // Filter to chat-capable models only (exclude embeddings, whisper, dall-e, tts, etc.)
-        $chat_prefixes = array('gpt-', 'o1', 'o3', 'o4', 'chatgpt');
-        $exclude_suffix = array('instruct', 'embedding', 'similarity', 'search', 'edit', 'insert', 'audio', 'realtime');
+        // Exclude models that clearly cannot do text chat/completion.
+        // Everything else is shown — this avoids missing new models OpenAI releases.
+        $exclude_patterns = array(
+            'embedding', 'embed',
+            'whisper',
+            'dall-e', 'dalle',
+            'tts',
+            'transcribe',
+            'image',
+            'moderation',
+            'text-davinci-edit',
+            'text-similarity',
+            'text-search',
+            'code-search',
+        );
 
         $models = array();
         foreach ($body['data'] as $model) {
-            $id = $model['id'];
+            $id    = $model['id'];
             $lower = strtolower($id);
 
-            $is_chat = false;
-            foreach ($chat_prefixes as $prefix) {
-                if (strpos($lower, $prefix) === 0) {
-                    $is_chat = true;
-                    break;
-                }
-            }
-            if (!$is_chat) continue;
-
             $excluded = false;
-            foreach ($exclude_suffix as $suffix) {
-                if (strpos($lower, $suffix) !== false) {
+            foreach ($exclude_patterns as $pattern) {
+                if (strpos($lower, $pattern) !== false) {
                     $excluded = true;
                     break;
                 }
