@@ -59,15 +59,19 @@ class WIT_Admin_Ajax {
         $batch_processor = new WIT_Batch_Processor();
         $result = $batch_processor->process_single($post_id, $target_language);
 
+        $debug = isset($result['debug']) ? $result['debug'] : array();
+
         if ($result['success']) {
             wp_send_json_success(array(
                 'message' => $result['message'],
                 'translated_post_id' => $result['translated_post_id'],
                 'edit_url' => get_edit_post_link($result['translated_post_id'], 'raw'),
+                'debug' => $debug,
             ));
         } else {
             wp_send_json_error(array(
-                'message' => $result['message']
+                'message' => $result['message'],
+                'debug' => $debug,
             ));
         }
     }

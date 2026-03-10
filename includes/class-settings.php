@@ -63,17 +63,17 @@ class WIT_Settings {
 
         // Claude settings
         $sanitized['claude_api_key'] = isset($input['claude_api_key']) ? sanitize_text_field($input['claude_api_key']) : '';
-        $sanitized['claude_model'] = isset($input['claude_model']) ? sanitize_text_field($input['claude_model']) : 'claude-3-5-sonnet-20241022';
+        $sanitized['claude_model'] = isset($input['claude_model']) ? sanitize_text_field($input['claude_model']) : 'claude-haiku-4-5-20251001';
 
         // Gemini settings
         $sanitized['gemini_api_key'] = isset($input['gemini_api_key']) ? sanitize_text_field($input['gemini_api_key']) : '';
-        $sanitized['gemini_model'] = isset($input['gemini_model']) ? sanitize_text_field($input['gemini_model']) : 'gemini-1.5-flash';
+        $sanitized['gemini_model'] = isset($input['gemini_model']) ? sanitize_text_field($input['gemini_model']) : 'gemini-2.5-flash';
 
         // Translation settings
-        $sanitized['translation_prompt'] = isset($input['translation_prompt']) ? wp_kses_post($input['translation_prompt']) : '';
+        $sanitized['translation_prompt'] = isset($input['translation_prompt']) ? sanitize_textarea_field($input['translation_prompt']) : '';
         $sanitized['translate_meta_fields'] = isset($input['translate_meta_fields']) ? (bool)$input['translate_meta_fields'] : false;
         $sanitized['meta_fields_list'] = isset($input['meta_fields_list']) ? sanitize_textarea_field($input['meta_fields_list']) : '';
-        $sanitized['batch_size'] = isset($input['batch_size']) ? absint($input['batch_size']) : 5;
+        $sanitized['batch_size'] = isset($input['batch_size']) ? min(50, max(1, absint($input['batch_size']))) : 5;
         $sanitized['enable_translation_memory'] = isset($input['enable_translation_memory']) ? (bool)$input['enable_translation_memory'] : false;
 
         return $sanitized;
@@ -312,7 +312,7 @@ class WIT_Settings {
             'claude_model' => 'claude-haiku-4-5-20251001',
             'gemini_api_key' => '',
             'gemini_model' => 'gemini-2.5-flash',
-            'translation_prompt' => 'Translate the following text to {target_language}. Return ONLY the translated text without any HTML escaping, encoding, or modifications. Do not escape special characters. Do not add \u, \\u, u003c or any Unicode escapes. Return plain text translation exactly as it should appear.',
+            'translation_prompt' => 'Translate the following text to {target_language}. Return ONLY the translated text, nothing else. Do not add quotes, explanations, or formatting. Keep proper nouns, brand names, and technical terms unchanged.',
             'translate_meta_fields' => true,
             'meta_fields_list' => '_yoast_wpseo_title,_yoast_wpseo_metadesc,_excerpt',
             'batch_size' => 5,

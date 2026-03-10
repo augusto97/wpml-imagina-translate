@@ -221,8 +221,18 @@ class WIT_WPML_Integration {
         $trid = $sitepress->get_element_trid($original_post_id, 'post_' . $post_type);
 
         if (!$trid) {
-            // Create new translation group
+            // Register the original post with WPML first to create a translation group
+            $sitepress->set_element_language_details(
+                $original_post_id,
+                'post_' . $post_type,
+                false,
+                $source_language
+            );
             $trid = $sitepress->get_element_trid($original_post_id, 'post_' . $post_type);
+        }
+
+        if (!$trid) {
+            return; // Cannot link without a translation group
         }
 
         // Set language for translated post
