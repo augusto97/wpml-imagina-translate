@@ -197,6 +197,7 @@
             $.ajax({
                 url: witAdmin.ajax_url,
                 type: 'POST',
+                dataType: 'json',
                 data: {
                     action: 'wit_translate_post',
                     nonce: witAdmin.nonce,
@@ -204,14 +205,19 @@
                     target_language: targetLanguage
                 },
                 success: function(response) {
-                    if (response.success) {
-                        callback(true, response.data);
+                    var data = (response && response.data) ? response.data : {};
+                    if (response && response.success) {
+                        callback(true, data);
                     } else {
-                        callback(false, response.data);
+                        if (!data.message) {
+                            data.message = witAdmin.strings.error || 'Error desconocido';
+                        }
+                        callback(false, data);
                     }
                 },
                 error: function(xhr, status, error) {
-                    callback(false, { message: error });
+                    var msg = error || (xhr.status ? 'HTTP ' + xhr.status : witAdmin.strings.error || 'Error de red');
+                    callback(false, { message: msg });
                 }
             });
         },

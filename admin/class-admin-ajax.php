@@ -39,6 +39,9 @@ class WIT_Admin_Ajax {
      * AJAX handler for translating a post
      */
     public function ajax_translate_post() {
+        // Translations can be slow — avoid PHP execution timeout killing the request
+        @set_time_limit(300);
+
         $this->verify_nonce();
 
         $post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
@@ -56,23 +59,30 @@ class WIT_Admin_Ajax {
             ));
         }
 
-        // Process translation
-        $batch_processor = new WIT_Batch_Processor();
-        $result = $batch_processor->process_single($post_id, $target_language);
+        // Process translation — catch any uncaught PHP Error/Exception
+        try {
+            $batch_processor = new WIT_Batch_Processor();
+            $result = $batch_processor->process_single($post_id, $target_language);
+        } catch (\Throwable $e) {
+            wp_send_json_error(array(
+                'message' => $e->getMessage() ?: __('Error interno del servidor', 'wpml-imagina-translate'),
+                'debug'   => array(get_class($e) . ': ' . $e->getMessage()),
+            ));
+        }
 
         $debug = isset($result['debug']) ? $result['debug'] : array();
 
         if ($result['success']) {
             wp_send_json_success(array(
-                'message' => $result['message'],
+                'message'            => $result['message'],
                 'translated_post_id' => $result['translated_post_id'],
-                'edit_url' => get_edit_post_link($result['translated_post_id'], 'raw'),
-                'debug' => $debug,
+                'edit_url'           => get_edit_post_link($result['translated_post_id'], 'raw'),
+                'debug'              => $debug,
             ));
         } else {
             wp_send_json_error(array(
-                'message' => $result['message'],
-                'debug' => $debug,
+                'message' => $result['message'] ?: __('Error desconocido en la traducción', 'wpml-imagina-translate'),
+                'debug'   => $debug,
             ));
         }
     }
