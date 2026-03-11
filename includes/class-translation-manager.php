@@ -37,7 +37,9 @@ class WIT_Translation_Manager {
             );
         }
 
-        $source_language = $this->wpml_integration->get_post_language($post_id);
+        $source_language  = $this->wpml_integration->get_post_language($post_id);
+        $elementor        = new WIT_Elementor_Handler();
+        $is_elementor     = $elementor->is_elementor_post($post_id);
 
         try {
             // Translate title
@@ -51,12 +53,25 @@ class WIT_Translation_Manager {
                 throw new Exception($title_result['error']);
             }
 
-            // Translate content
-            $content_result = $this->content_parser->translate_content(
-                $post->post_content,
-                $target_language,
-                $source_language
-            );
+            // Translate content.
+            // For Elementor posts the editable content lives in _elementor_data
+            // (post meta), not in post_content.  Elementor's front-end renderer
+            // ignores post_content entirely, so there is no point translating it —
+            // we just preserve it as-is and handle the Elementor data separately
+            // after the translated post has been created/updated.
+            if ($is_elementor) {
+                $content_result = array(
+                    'content' => '',  // Elementor will regenerate this from _elementor_data
+                    'error'   => null,
+                    'debug'   => array('Elementor post detected — content will be translated from _elementor_data'),
+                );
+            } else {
+                $content_result = $this->content_parser->translate_content(
+                    $post->post_content,
+                    $target_language,
+                    $source_language
+                );
+            }
 
             // Debug info is now provided directly by the parser
             $debug_info = isset($content_result['debug']) ? $content_result['debug'] : array();
@@ -80,7 +95,7 @@ class WIT_Translation_Manager {
             }
 
             $translated_data = array(
-                'title' => $title_result['title'],
+                'title'   => $title_result['title'],
                 'content' => $content_result['content'],
                 'excerpt' => $excerpt,
             );
@@ -93,6 +108,12 @@ class WIT_Translation_Manager {
                 $success = $this->wpml_integration->update_translated_post($existing_translation_id, $translated_data);
 
                 if ($success) {
+                    // Translate Elementor data if applicable
+                    if ($is_elementor) {
+                        $el_result  = $elementor->translate($post_id, $existing_translation_id, $target_language, $source_language);
+                        $debug_info = array_merge($debug_info, $el_result['debug']);
+                    }
+
                     // Translate meta fields if enabled
                     if ($this->settings['translate_meta_fields']) {
                         $this->translate_meta_fields($post_id, $existing_translation_id, $target_language, $source_language);
@@ -101,10 +122,10 @@ class WIT_Translation_Manager {
                     $this->log_translation($post_id, $target_language, 'success', 'Updated existing translation');
 
                     return array(
-                        'success' => true,
-                        'message' => __('Traducción actualizada exitosamente', 'wpml-imagina-translate'),
+                        'success'            => true,
+                        'message'            => __('Traducción actualizada exitosamente', 'wpml-imagina-translate'),
                         'translated_post_id' => $existing_translation_id,
-                        'debug' => $debug_info,
+                        'debug'              => $debug_info,
                     );
                 } else {
                     throw new Exception(__('Error al actualizar la traducción', 'wpml-imagina-translate'));
@@ -117,6 +138,12 @@ class WIT_Translation_Manager {
                     throw new Exception($new_post_id->get_error_message());
                 }
 
+                // Translate Elementor data if applicable
+                if ($is_elementor) {
+                    $el_result  = $elementor->translate($post_id, $new_post_id, $target_language, $source_language);
+                    $debug_info = array_merge($debug_info, $el_result['debug']);
+                }
+
                 // Translate meta fields if enabled
                 if ($this->settings['translate_meta_fields']) {
                     $this->translate_meta_fields($post_id, $new_post_id, $target_language, $source_language);
@@ -125,10 +152,10 @@ class WIT_Translation_Manager {
                 $this->log_translation($post_id, $target_language, 'success', 'Created new translation');
 
                 return array(
-                    'success' => true,
-                    'message' => __('Traducción creada exitosamente', 'wpml-imagina-translate'),
+                    'success'            => true,
+                    'message'            => __('Traducción creada exitosamente', 'wpml-imagina-translate'),
                     'translated_post_id' => $new_post_id,
-                    'debug' => $debug_info,
+                    'debug'              => $debug_info,
                 );
             }
         } catch (\Throwable $e) {
