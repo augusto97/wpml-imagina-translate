@@ -128,11 +128,14 @@ class WIT_Translator_Engine {
 
         // If the model rejects temperature, retry once without it
         if (isset($decoded['error'])) {
-            $msg = $decoded['error']['message'] ?? '';
+            $msg = isset($decoded['error']['message']) ? (string) $decoded['error']['message'] : '';
             if ($with_temperature && strpos($msg, 'temperature') !== false) {
                 return $this->call_openai_chat($text, $prompt, false);
             }
-            return array('translation' => '', 'error' => $msg);
+            return array(
+                'translation' => '',
+                'error'       => $msg ?: __('Error de la API de OpenAI', 'wpml-imagina-translate'),
+            );
         }
 
         if (!isset($decoded['choices'][0]['message']['content'])) {

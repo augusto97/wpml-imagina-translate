@@ -131,12 +131,13 @@ class WIT_Translation_Manager {
                     'debug' => $debug_info,
                 );
             }
-        } catch (Exception $e) {
-            $this->log_translation($post_id, $target_language, 'error', $e->getMessage());
+        } catch (\Throwable $e) {
+            $message = $e->getMessage() ?: __('Error interno durante la traducción', 'wpml-imagina-translate');
+            $this->log_translation($post_id, $target_language, 'error', $message);
 
             return array(
-                'success' => false,
-                'message' => $e->getMessage(),
+                'success'            => false,
+                'message'            => $message,
                 'translated_post_id' => 0,
             );
         }
