@@ -466,6 +466,156 @@ class WIT_Translator_Engine {
     }
 
     /**
+     * Translate a batch of texts in a SINGLE API call.
+     *
+     * Sends all texts as a numbered list and parses the numbered response.
+     * Falls back to individual translate() calls if parsing fails.
+     *
+     * @param string[] $texts           Indexed array of strings to translate.
+     * @param string   $target_language Target language code.
+     * @param string   $source_language Source language code (optional).
+     * @return array   Indexed array (same length as $texts), each element:
+     *                 {translation: string, error: string|null}
+     */
+    public function translate_batch($texts, $target_language, $source_language = '') {
+        if (empty($texts)) {
+            return array();
+        }
+
+        if (empty($this->api_key)) {
+            $err = __('API key no configurada', 'wpml-imagina-translate');
+            return array_fill(0, count($texts), array('translation' => '', 'error' => $err));
+        }
+
+        $target_lang_name = $this->get_language_name($target_language);
+
+        // Split into chunks of 40 to stay within token limits
+        $chunk_size  = 40;
+        $chunks      = array_chunk($texts, $chunk_size, true); // preserve keys
+        $results     = array();
+
+        foreach ($chunks as $chunk) {
+            $chunk_results = $this->translate_batch_chunk($chunk, $target_lang_name, $source_language);
+            $results = $results + $chunk_results; // merge preserving numeric keys
+        }
+
+        // Ensure every index exists in results
+        $out = array();
+        foreach ($texts as $i => $text) {
+            $out[$i] = isset($results[$i]) ? $results[$i] : array('translation' => '', 'error' => 'Missing response');
+        }
+
+        return $out;
+    }
+
+    /**
+     * Translate one chunk (up to 40 texts) in a single API call.
+     *
+     * @param  array  $chunk           Slice of texts with their original indices.
+     * @param  string $target_lang_name Human-readable target language name.
+     * @param  string $source_language  Source language code.
+     * @return array  Same keys as $chunk, each value: {translation, error}
+     */
+    private function translate_batch_chunk($chunk, $target_lang_name, $source_language) {
+        // Build numbered list: "1. text\n2. text\n..."
+        $keys      = array_keys($chunk);
+        $numbered  = array();
+        foreach ($chunk as $i => $text) {
+            $pos        = array_search($i, $keys) + 1; // 1-based position in this chunk
+            $numbered[] = $pos . '. ' . $text;
+        }
+        $input_text = implode("\n", $numbered);
+
+        $prompt = 'You are a professional translator. '
+                . 'Translate each numbered item below into ' . $target_lang_name . '. '
+                . 'Return ONLY the numbered translations in the SAME order and numbering. '
+                . 'Do NOT add explanations, notes, or extra text. '
+                . 'Keep any HTML tags, special characters, or markup exactly as they appear. '
+                . 'Format: "1. [translation]\n2. [translation]\n..."';
+
+        try {
+            switch ($this->provider) {
+                case 'openai':
+                    $raw = $this->call_openai_chat($input_text, $prompt, true);
+                    break;
+                case 'claude':
+                    $raw = $this->translate_claude($input_text, $prompt);
+                    break;
+                case 'gemini':
+                    $raw = $this->translate_gemini($input_text, $prompt);
+                    break;
+                default:
+                    $raw = array('translation' => '', 'error' => __('Proveedor de IA no válido', 'wpml-imagina-translate'));
+            }
+        } catch (Exception $e) {
+            $raw = array('translation' => '', 'error' => $e->getMessage());
+        }
+
+        // If the API call itself failed, propagate error to all items in this chunk
+        if (!empty($raw['error']) || empty($raw['translation'])) {
+            $err = isset($raw['error']) ? $raw['error'] : 'Empty response';
+            $out = array();
+            foreach ($keys as $i) {
+                $out[$i] = array('translation' => '', 'error' => $err);
+            }
+            return $out;
+        }
+
+        // Parse numbered response back to per-item translations
+        $parsed = $this->parse_numbered_response($raw['translation'], count($chunk));
+
+        $out = array();
+        foreach ($keys as $pos_index => $original_index) {
+            $pos = $pos_index + 1; // 1-based
+            if (isset($parsed[$pos]) && !empty($parsed[$pos])) {
+                $out[$original_index] = array('translation' => $parsed[$pos], 'error' => null);
+            } else {
+                $out[$original_index] = array('translation' => '', 'error' => 'Parse error for item ' . $pos);
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Parse a numbered-list API response into an associative array.
+     *
+     * Handles various formats:
+     *   "1. text"  "1) text"  "1: text"  or just "text" on its own line if count === 1
+     *
+     * @param  string $response      Raw text from the AI.
+     * @param  int    $expected_count Expected number of items.
+     * @return array  1-based index => translation string
+     */
+    private function parse_numbered_response($response, $expected_count) {
+        $result = array();
+        $lines  = explode("\n", trim($response));
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (empty($line)) {
+                continue;
+            }
+
+            // Match "1. text", "1) text", "1: text"
+            if (preg_match('/^(\d+)[.):\s]\s*(.+)$/su', $line, $m)) {
+                $num = (int) $m[1];
+                $translation = trim($m[2]);
+                if ($num >= 1 && !empty($translation)) {
+                    $result[$num] = $translation;
+                }
+            }
+        }
+
+        // If the AI returned items without numbers but count matches, assign sequentially
+        if (empty($result) && $expected_count === 1 && !empty($response)) {
+            $result[1] = trim($response);
+        }
+
+        return $result;
+    }
+
+    /**
      * Test API connection
      */
     public function test_connection() {
