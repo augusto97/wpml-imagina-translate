@@ -91,6 +91,7 @@ class WPML_Imagina_Translate {
         require_once WIT_PLUGIN_DIR . 'includes/class-settings.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-translator-engine.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-content-parser.php';
+        require_once WIT_PLUGIN_DIR . 'includes/class-elementor-handler.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-wpml-integration.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-translation-manager.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-batch-processor.php';
