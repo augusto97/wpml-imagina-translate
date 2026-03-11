@@ -167,22 +167,37 @@ class WIT_WPML_Integration {
             return new WP_Error('invalid_post', __('Post original no encontrado', 'wpml-imagina-translate'));
         }
 
-        // Prepare new post data
+        // Create the post with empty content first so wp_insert_post() filters
+        // never touch the Gutenberg block HTML (balanceTags / kses / WPML hooks
+        // on content_save_pre corrupt block comments and break editor validation).
         $new_post_data = array(
-            'post_title' => $translated_data['title'],
-            'post_content' => $translated_data['content'],
-            'post_excerpt' => isset($translated_data['excerpt']) ? $translated_data['excerpt'] : '',
-            'post_status' => 'draft', // Create as draft for review
-            'post_type' => $original_post->post_type,
-            'post_author' => $original_post->post_author,
-            'post_parent' => 0, // Will be linked via WPML
-            'menu_order' => $original_post->menu_order,
+            'post_title'     => $translated_data['title'],
+            'post_content'   => '',   // intentionally empty — written below via $wpdb
+            'post_excerpt'   => isset($translated_data['excerpt']) ? $translated_data['excerpt'] : '',
+            'post_status'    => 'draft',
+            'post_type'      => $original_post->post_type,
+            'post_author'    => $original_post->post_author,
+            'post_parent'    => 0,
+            'menu_order'     => $original_post->menu_order,
             'comment_status' => $original_post->comment_status,
-            'ping_status' => $original_post->ping_status,
+            'ping_status'    => $original_post->ping_status,
         );
 
         // Insert the new post
         $new_post_id = wp_insert_post($new_post_data);
+
+        // Write translated content directly, bypassing all content_save_pre filters
+        if (!is_wp_error($new_post_id) && $new_post_id) {
+            global $wpdb;
+            $wpdb->update(
+                $wpdb->posts,
+                array('post_content' => $translated_data['content']),
+                array('ID' => $new_post_id),
+                array('%s'),
+                array('%d')
+            );
+            clean_post_cache($new_post_id);
+        }
 
         if (is_wp_error($new_post_id)) {
             return $new_post_id;
@@ -309,24 +324,41 @@ class WIT_WPML_Integration {
     /**
      * Update existing translation
      *
+     * Uses $wpdb directly to bypass WordPress/WPML filters on content_save_pre
+     * (balanceTags, wp_filter_post_kses, etc.) that corrupt Gutenberg block HTML
+     * and break block validation in the editor.
+     *
      * @param int $post_id
      * @param array $translated_data
      * @return bool
      */
     public function update_translated_post($post_id, $translated_data) {
-        $post_data = array(
-            'ID' => $post_id,
-            'post_title' => $translated_data['title'],
-            'post_content' => $translated_data['content'],
-        );
+        global $wpdb;
 
-        if (isset($translated_data['excerpt'])) {
-            $post_data['post_excerpt'] = $translated_data['excerpt'];
+        $fields = array(
+            'post_title'        => $translated_data['title'],
+            'post_content'      => $translated_data['content'],
+            'post_modified'     => current_time('mysql'),
+            'post_modified_gmt' => current_time('mysql', 1),
+        );
+        $formats = array('%s', '%s', '%s', '%s');
+
+        if (!empty($translated_data['excerpt'])) {
+            $fields['post_excerpt'] = $translated_data['excerpt'];
+            $formats[]              = '%s';
         }
 
-        $result = wp_update_post($post_data);
+        $result = $wpdb->update(
+            $wpdb->posts,
+            $fields,
+            array('ID' => $post_id),
+            $formats,
+            array('%d')
+        );
 
-        return !is_wp_error($result);
+        clean_post_cache($post_id);
+
+        return $result !== false;
     }
 
     /**
