@@ -122,12 +122,12 @@ class WIT_Content_Parser {
             }
         }
 
-        // Translate translatable attributes (alt text, captions, etc.)
-        if (!empty($block['attrs'])) {
-            $block['attrs'] = $this->translate_block_attributes(
-                $block['attrs'], $translator, $target_language, $source_language
-            );
-        }
+        // NOTE: block['attrs'] (the JSON in the block comment) is intentionally NOT
+        // translated here. Gutenberg validates blocks by comparing the stored innerHTML
+        // with what the block's save() function renders from its attrs. If we translate
+        // attrs independently (separate AI call) the two translations can diverge,
+        // causing "El bloque contiene contenido inesperado" validation errors.
+        // All visible text is already handled above via text-node translation.
 
         // Recurse into inner blocks
         if (!empty($block['innerBlocks'])) {

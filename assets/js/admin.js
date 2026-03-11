@@ -133,7 +133,7 @@
                         console.groupEnd();
                     }
                     console.error('Translation error:', data.message);
-                    $button.text('Error - Reintentar');
+                    $button.text(data.maybeBackground ? 'Verificar / Reintentar' : 'Error - Reintentar');
                     alert(witAdmin.strings.error + ': ' + (data.message || 'Error desconocido'));
                 }
             });
@@ -216,8 +216,14 @@
                     }
                 },
                 error: function(xhr, status, error) {
-                    var msg = error || (xhr.status ? 'HTTP ' + xhr.status : witAdmin.strings.error || 'Error de red');
-                    callback(false, { message: msg });
+                    var msg;
+                    if (xhr.status === 504 || xhr.status === 502) {
+                        msg = 'La traducción tardó más de lo esperado (timeout del servidor). ' +
+                              'Revisa el log en unos segundos — es posible que se haya completado en segundo plano.';
+                    } else {
+                        msg = error || (xhr.status ? 'HTTP ' + xhr.status : witAdmin.strings.error || 'Error de red');
+                    }
+                    callback(false, { message: msg, maybeBackground: (xhr.status === 504 || xhr.status === 502) });
                 }
             });
         },
