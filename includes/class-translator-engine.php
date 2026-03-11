@@ -108,7 +108,7 @@ class WIT_Translator_Engine {
         }
 
         $response = wp_remote_post('https://api.openai.com/v1/chat/completions', array(
-            'timeout' => 60,
+            'timeout' => 120,
             'headers' => array(
                 'Content-Type'  => 'application/json',
                 'Authorization' => 'Bearer ' . $this->api_key,
@@ -150,7 +150,7 @@ class WIT_Translator_Engine {
      */
     private function translate_claude($text, $prompt) {
         $response = wp_remote_post('https://api.anthropic.com/v1/messages', array(
-            'timeout' => 60,
+            'timeout' => 120,
             'headers' => array(
                 'Content-Type' => 'application/json',
                 'x-api-key' => $this->api_key,
@@ -158,7 +158,7 @@ class WIT_Translator_Engine {
             ),
             'body' => json_encode(array(
                 'model' => $this->model,
-                'max_tokens' => 8000,
+                'max_tokens' => 16000,
                 'system' => $prompt,
                 'messages' => array(
                     array(
@@ -215,7 +215,7 @@ class WIT_Translator_Engine {
         $response = wp_remote_post(
             'https://generativelanguage.googleapis.com/v1beta/models/' . $this->model . ':generateContent?key=' . $this->api_key,
             array(
-                'timeout' => 60,
+                'timeout' => 120,
                 'headers' => array(
                     'Content-Type' => 'application/json',
                 ),
