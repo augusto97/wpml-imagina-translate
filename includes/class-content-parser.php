@@ -96,10 +96,12 @@ class WIT_Content_Parser {
             return $html;
         }
 
-        // --- Load DOM ---
+        // Load DOM for text-node DETECTION only.
+        // We NEVER call saveHTML() — re-serialising via DOMDocument alters entity
+        // encoding (é → &#233;), normalises void elements, and changes whitespace,
+        // which breaks Gutenberg block validation in the editor.
         libxml_use_internal_errors(true);
         $dom = new DOMDocument('1.0', 'UTF-8');
-        // Wrap in a div so we can extract just our content later
         $dom->loadHTML(
             '<?xml encoding="UTF-8"><div id="wit-root">' . $html . '</div>',
             LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD
@@ -108,7 +110,6 @@ class WIT_Content_Parser {
 
         $xpath   = new DOMXPath($dom);
         $wrapper = $xpath->query('//*[@id="wit-root"]')->item(0);
-
         if (!$wrapper) {
             return $html;
         }
@@ -125,22 +126,19 @@ class WIT_Content_Parser {
         }
 
         // --- Pass 1: collect unique translatable strings ---
-        $seen      = array(); // trimmed_text => index
-        $originals = array(); // ordered list of unique texts to translate
+        $seen      = array(); // trimmed_text => index in $originals
+        $originals = array();
 
         foreach ($nodes as $node) {
-            $raw     = $node->nodeValue;
+            $raw     = $node->nodeValue; // DOMDocument decodes HTML entities here
             $trimmed = trim($raw);
 
             if (mb_strlen($trimmed) < 2) {
                 continue;
             }
-
-            // Skip pure numbers / punctuation / whitespace / non-breaking space
             if (preg_match('/^[\d\s\p{P}\p{S}\x{00A0}]+$/u', $trimmed)) {
                 continue;
             }
-
             if (!array_key_exists($trimmed, $seen)) {
                 $seen[$trimmed] = count($originals);
                 $originals[]    = $trimmed;
@@ -156,14 +154,28 @@ class WIT_Content_Parser {
         // --- Pass 2: batch-translate all unique texts in ONE API call ---
         $translations = $translator->translate_batch($originals, $target_language, $source_language);
 
-        // --- Pass 3: apply translations directly to DOM text nodes ---
-        // This avoids all str_replace-on-raw-HTML risks (matching inside tag names, attributes, etc.)
+        // --- Pass 3: apply translations to the ORIGINAL HTML string ---
+        //
+        // Key insight: every DOM text node appears between a closing ">" and an
+        // opening "<" in the source HTML.  Searching for ">text<" is therefore
+        // safe — it cannot match inside a tag name, class name, or attribute.
+        //
+        // We manually encode only &, < and > (the three chars that must be
+        // escaped in HTML text content) instead of running htmlspecialchars()
+        // which also encodes " and can double-encode &amp; etc.
+        $result  = $html;
+        $applied = array();
+        $changes = 0;
+
         foreach ($nodes as $node) {
             $raw     = $node->nodeValue;
             $trimmed = trim($raw);
 
             if (!array_key_exists($trimmed, $seen)) {
                 continue;
+            }
+            if (isset($applied[$raw])) {
+                continue; // same raw value already processed
             }
 
             $idx = $seen[$trimmed];
@@ -176,32 +188,44 @@ class WIT_Content_Parser {
                 continue;
             }
 
-            // Preserve leading/trailing whitespace from the original node value
+            // Preserve surrounding whitespace
             $leading = $trailing = '';
             if (preg_match('/^(\s+)/u', $raw, $m)) $leading  = $m[1];
             if (preg_match('/(\s+)$/u', $raw, $m)) $trailing = $m[1];
+            $translated = $leading . $t['translation'] . $trailing;
 
-            // Set translated value directly on the DOM node.
-            // DOMDocument handles entity encoding automatically when serializing.
-            $node->nodeValue = $leading . $t['translation'] . $trailing;
-            $this->strings_translated++;
-            $this->debug_log[] = '  RECV: "' . mb_substr($t['translation'], 0, 80)
-                               . (mb_strlen($t['translation']) > 80 ? '...' : '') . '"';
+            // Encode only &, < and > so the search string matches the HTML exactly.
+            // (DOMDocument nodeValue gives decoded text; we must re-encode these
+            //  three chars to match how they are stored in the HTML string.)
+            $enc     = array('&' => '&amp;', '<' => '&lt;', '>' => '&gt;');
+            $s_html  = strtr($raw,        $enc);
+            $r_html  = strtr($translated, $enc);
+
+            $found = false;
+
+            // Preferred: context-anchored — the text is between > and <
+            if (strpos($result, '>' . $s_html . '<') !== false) {
+                $result = str_replace('>' . $s_html . '<', '>' . $r_html . '<', $result);
+                $found  = true;
+            }
+            // Fallback: text may span multiple lines or have adjacent text siblings;
+            // only safe when the phrase is long enough to not match any tag name.
+            elseif (mb_strlen($trimmed) > 15 || strpos($trimmed, ' ') !== false) {
+                if (strpos($result, $s_html) !== false) {
+                    $result = str_replace($s_html, $r_html, $result);
+                    $found  = true;
+                }
+            }
+
+            if ($found) {
+                $applied[$raw] = true;
+                $this->strings_translated++;
+                $changes++;
+                $this->debug_log[] = '  RECV: "' . mb_substr($t['translation'], 0, 80)
+                                   . (mb_strlen($t['translation']) > 80 ? '...' : '') . '"';
+            }
         }
 
-        if ($this->strings_translated === 0) {
-            return $html;
-        }
-
-        // --- Pass 4: serialize back to HTML from DOM ---
-        // We extract child nodes of the wrapper div, not the div itself, to avoid
-        // adding an extra wrapper element. Block comments (<!-- wp:xxx -->) are
-        // DOMComment nodes and are preserved verbatim by saveHTML().
-        $inner = '';
-        foreach ($wrapper->childNodes as $child) {
-            $inner .= $dom->saveHTML($child);
-        }
-
-        return $inner !== '' ? $inner : $html;
+        return $changes > 0 ? $result : $html;
     }
 }
