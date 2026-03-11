@@ -79,64 +79,73 @@
         translateSingle: function(e) {
             e.preventDefault();
 
-            const $button = $(this);
-            const postId = $button.data('post-id');
+            const $button       = $(this);
+            const postId        = $button.data('post-id');
             const targetLanguage = $button.data('target-lang');
-            const $row = $button.closest('tr');
+            const $row          = $button.closest('tr');
 
             $button.addClass('wit-translating').prop('disabled', true).text(witAdmin.strings.translating);
 
-            WitAdmin.translatePost(postId, targetLanguage, function(success, data) {
-                $button.removeClass('wit-translating').prop('disabled', false);
+            WitAdmin.translatePost(
+                postId,
+                targetLanguage,
+                // ── completion callback ──────────────────────────────────────
+                function(success, data) {
+                    $button.removeClass('wit-translating wit-backgrounded').prop('disabled', false);
+                    // Remove any hint text we injected
+                    $button.siblings('.wit-bg-hint').remove();
 
-                if (success) {
-                    // Show debug log in console
-                    if (data.debug && data.debug.length > 0) {
-                        console.group('Translation Debug Info - Post #' + postId);
-                        data.debug.forEach(function(log) {
-                            console.log(log);
-                        });
-                        console.groupEnd();
-                    }
-
-                    $button.text('✓ ' + witAdmin.strings.success).removeClass('button-primary').addClass('button-secondary');
-
-                    // Update row to show translation status
-                    const $statusCell = $row.find('td:eq(2)');
-                    $statusCell.html('<span class="wit-status-success">✓ Traducido</span>');
-
-                    // Add edit translation link if not exists
-                    if (data.edit_url) {
-                        var existingLinks = $row.find('.wit-edit-translation-link');
-                        if (existingLinks.length === 0) {
-                            var $editLink = $('<a>')
-                                .attr('href', data.edit_url)
-                                .attr('target', '_blank')
-                                .addClass('button button-small wit-edit-translation-link')
-                                .text('Editar Traducción');
-                            $button.after($editLink);
+                    if (success) {
+                        if (data.debug && data.debug.length > 0) {
+                            console.group('Translation Debug Info - Post #' + postId);
+                            data.debug.forEach(function(log) { console.log(log); });
+                            console.groupEnd();
                         }
-                    }
 
-                    // Change button text to Re-Traducir
-                    setTimeout(function() {
-                        $button.text('Re-Traducir').removeClass('button-secondary').addClass('button-primary');
-                    }, 2000);
+                        $button.text('✓ ' + witAdmin.strings.success)
+                               .removeClass('button-primary').addClass('button-secondary');
 
-                } else {
-                    // Show debug log on error too
-                    if (data.debug && data.debug.length > 0) {
-                        console.group('Translation Debug (ERROR) - Post #' + postId);
-                        data.debug.forEach(function(log) {
-                            console.log(log);
-                        });
-                        console.groupEnd();
+                        const $statusCell = $row.find('td:eq(2)');
+                        $statusCell.html('<span class="wit-status-success">✓ Traducido</span>');
+
+                        if (data.edit_url) {
+                            if ($row.find('.wit-edit-translation-link').length === 0) {
+                                $('<a>')
+                                    .attr('href', data.edit_url)
+                                    .attr('target', '_blank')
+                                    .addClass('button button-small wit-edit-translation-link')
+                                    .text('Editar Traducción')
+                                    .insertAfter($button);
+                            }
+                        }
+
+                        setTimeout(function() {
+                            $button.text('Re-Traducir')
+                                   .removeClass('button-secondary').addClass('button-primary');
+                        }, 2000);
+
+                    } else {
+                        if (data.debug && data.debug.length > 0) {
+                            console.group('Translation Debug (ERROR) - Post #' + postId);
+                            data.debug.forEach(function(log) { console.log(log); });
+                            console.groupEnd();
+                        }
+                        console.error('Translation error:', data.message);
+                        $button.text('Error — Reintentar');
+                        alert('Error en la traducción: ' + (data.message || 'Error desconocido'));
                     }
-                    console.error('Translation error:', data.message);
-                    $button.text(data.maybeBackground ? 'Verificar / Reintentar' : 'Error - Reintentar');
-                    alert(witAdmin.strings.error + ': ' + (data.message || 'Error desconocido'));
+                },
+                // ── backgrounded callback (called when the HTTP connection is cut) ──
+                function() {
+                    $button.addClass('wit-backgrounded').text('⏳ Procesando…');
+                    // Small descriptive hint below the button
+                    if ($button.siblings('.wit-bg-hint').length === 0) {
+                        $('<span class="wit-bg-hint">')
+                            .text('La IA está generando la traducción. Esto puede tardar varios minutos. No cierres esta página.')
+                            .insertAfter($button);
+                    }
                 }
-            });
+            );
         },
 
         processBatch: function(postIds, targetLanguage) {
@@ -155,77 +164,176 @@
             // Process posts sequentially
             const processNext = () => {
                 if (processed >= total) {
-                    // All done
                     this.onBatchComplete(results);
                     return;
                 }
 
-                const postId = postIds[processed];
-                const $row = $('tr[data-post-id="' + postId + '"]');
+                const postId    = postIds[processed];
+                const $row      = $('tr[data-post-id="' + postId + '"]');
                 const postTitle = $row.find('strong').text();
 
                 this.addLogEntry('Traduciendo: ' + postTitle, 'processing');
 
-                this.translatePost(postId, targetLanguage, (success, data) => {
-                    processed++;
+                this.translatePost(
+                    postId,
+                    targetLanguage,
+                    // ── completion callback ──────────────────────────────────
+                    (success, data) => {
+                        processed++;
 
-                    results.push({
-                        postId: postId,
-                        title: postTitle,
-                        success: success,
-                        message: data.message
-                    });
+                        results.push({
+                            postId:  postId,
+                            title:   postTitle,
+                            success: success,
+                            message: data.message
+                        });
 
-                    if (success) {
-                        this.addLogEntry('✓ ' + postTitle + ' - Traducido exitosamente', 'success');
-                        $row.fadeOut(500, function() { $(this).remove(); });
-                    } else {
-                        this.addLogEntry('✗ ' + postTitle + ' - Error: ' + data.message, 'error');
+                        if (success) {
+                            this.addLogEntry('✓ ' + postTitle + ' — Traducido exitosamente', 'success');
+                            $row.fadeOut(500, function() { $(this).remove(); });
+                        } else {
+                            this.addLogEntry('✗ ' + postTitle + ' — Error: ' + data.message, 'error');
+                        }
+
+                        this.updateProgress(processed, total);
+                        setTimeout(processNext, 500);
+                    },
+                    // ── backgrounded callback ────────────────────────────────
+                    () => {
+                        this.addLogEntry(
+                            '⏳ ' + postTitle + ' — procesando en segundo plano (la IA puede tardar varios minutos)…',
+                            'processing'
+                        );
                     }
-
-                    this.updateProgress(processed, total);
-
-                    // Process next after a small delay
-                    setTimeout(processNext, 500);
-                });
+                );
             };
 
             processNext();
         },
 
-        translatePost: function(postId, targetLanguage, callback) {
+        /**
+         * Translate a post and call `callback(success, data)` when done.
+         *
+         * If the server HTTP connection is cut before PHP finishes (gateway
+         * timeout), `onBackgrounded()` is called so the UI can update, and
+         * polling takes over.  The callback is still called exactly once when
+         * the final result is available.
+         *
+         * Polling calls wp_ajax_wit_check_translation_status every 5 s and
+         * resolves once the transient status is 'complete' or 'error'.
+         * It gives up after 10 minutes and reports a timeout message.
+         *
+         * @param {number}   postId
+         * @param {string}   targetLanguage
+         * @param {Function} callback(success, data)
+         * @param {Function} [onBackgrounded]  — called when HTTP connection drops
+         */
+        translatePost: function(postId, targetLanguage, callback, onBackgrounded) {
+            let pollInterval  = null;
+            let callbackFired = false;
+            let pollAttempts  = 0;
+            const MAX_POLLS   = 120; // 5 s × 120 = 10 min
+
+            // Fire the callback exactly once and stop polling.
+            const done = function(success, data) {
+                if (callbackFired) return;
+                callbackFired = true;
+                if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+                callback(success, data);
+            };
+
+            // Begin polling the status endpoint every 5 seconds.
+            const startPolling = function() {
+                if (callbackFired || pollInterval) return;
+
+                if (onBackgrounded) onBackgrounded();
+
+                pollInterval = setInterval(function() {
+                    if (callbackFired) { clearInterval(pollInterval); return; }
+
+                    if (++pollAttempts > MAX_POLLS) {
+                        clearInterval(pollInterval);
+                        done(false, {
+                            message: 'Tiempo de espera agotado (10 min). ' +
+                                     'Revisa el log de traducciones — puede que se haya completado.'
+                        });
+                        return;
+                    }
+
+                    $.ajax({
+                        url:      witAdmin.ajax_url,
+                        type:     'POST',
+                        dataType: 'json',
+                        timeout:  10000,
+                        data: {
+                            action:          'wit_check_translation_status',
+                            nonce:           witAdmin.nonce,
+                            post_id:         postId,
+                            target_language: targetLanguage
+                        },
+                        success: function(response) {
+                            if (!response || !response.data) return;
+                            const d = response.data;
+                            if (d.status === 'complete') {
+                                done(true, d);
+                            } else if (d.status === 'error') {
+                                done(false, d);
+                            }
+                            // 'processing' or 'not_found' → keep polling
+                        }
+                        // Ignore individual poll errors — just retry on next tick
+                    });
+                }, 5000);
+            };
+
+            // ── Main translation AJAX call ──────────────────────────────────
+            // No client-side timeout: the server/proxy will cut the connection
+            // if it runs too long (typically 504 after 60-120 s depending on
+            // the server). When that happens we fall through to polling.
             $.ajax({
-                url: witAdmin.ajax_url,
-                type: 'POST',
+                url:      witAdmin.ajax_url,
+                type:     'POST',
                 dataType: 'json',
                 data: {
-                    action: 'wit_translate_post',
-                    nonce: witAdmin.nonce,
-                    post_id: postId,
+                    action:          'wit_translate_post',
+                    nonce:           witAdmin.nonce,
+                    post_id:         postId,
                     target_language: targetLanguage
                 },
                 success: function(response) {
                     var data = (response && response.data) ? response.data : {};
                     if (response && response.success) {
-                        callback(true, data);
+                        done(true, data);
                     } else {
                         if (!data.message) {
                             data.message = witAdmin.strings.error || 'Error desconocido';
                         }
-                        callback(false, data);
+                        done(false, data);
                     }
                 },
-                error: function(xhr, status, error) {
-                    var msg;
-                    if (xhr.status === 504 || xhr.status === 502) {
-                        msg = 'La traducción tardó más de lo esperado (timeout del servidor). ' +
-                              'Revisa el log en unos segundos — es posible que se haya completado en segundo plano.';
+                error: function(xhr, status) {
+                    // Gateway timeout or proxy timeout — PHP is still running
+                    // thanks to ignore_user_abort(true). Switch to polling.
+                    if (xhr.status === 504 || xhr.status === 502 || status === 'timeout') {
+                        startPolling();
                     } else {
-                        msg = error || (xhr.status ? 'HTTP ' + xhr.status : witAdmin.strings.error || 'Error de red');
+                        // Genuine network / server error — report immediately.
+                        var msg = xhr.status
+                            ? 'HTTP ' + xhr.status
+                            : (witAdmin.strings.error || 'Error de red');
+                        done(false, { message: msg });
                     }
-                    callback(false, { message: msg, maybeBackground: (xhr.status === 504 || xhr.status === 502) });
                 }
             });
+
+            // Also start polling after 30 s even if the main connection is
+            // still open — this keeps the UI informed and handles cases where
+            // the proxy cuts silently without sending a 504.
+            setTimeout(function() {
+                if (!callbackFired && !pollInterval) {
+                    startPolling();
+                }
+            }, 30000);
         },
 
         updateProgress: function(current, total) {
@@ -235,9 +343,9 @@
         },
 
         addLogEntry: function(message, type) {
-            const $log = $('#wit-progress-log');
+            const $log      = $('#wit-progress-log');
             const timestamp = new Date().toLocaleTimeString();
-            const entry = $('<div>')
+            const entry     = $('<div>')
                 .addClass('wit-log-entry')
                 .addClass(type)
                 .text('[' + timestamp + '] ' + message);
@@ -248,37 +356,34 @@
 
         onBatchComplete: function(results) {
             const successful = results.filter(r => r.success).length;
-            const failed = results.filter(r => !r.success).length;
+            const failed     = results.filter(r => !r.success).length;
 
             this.addLogEntry('', 'success');
             this.addLogEntry('=== PROCESO COMPLETADO ===', 'success');
-            this.addLogEntry('Total: ' + results.length, 'success');
-            this.addLogEntry('Exitosos: ' + successful, 'success');
-            this.addLogEntry('Fallidos: ' + failed, failed > 0 ? 'error' : 'success');
+            this.addLogEntry('Total: '     + results.length, 'success');
+            this.addLogEntry('Exitosos: '  + successful,     'success');
+            this.addLogEntry('Fallidos: '  + failed, failed > 0 ? 'error' : 'success');
 
             // Re-enable buttons
             $('#wit-translate-selected, #wit-select-all').prop('disabled', false);
             $('#wit-check-all').prop('checked', false);
             this.updateSelectedCount();
 
-            // Show completion alert
             alert('Traducción completada!\n\nExitosos: ' + successful + '\nFallidos: ' + failed);
         }
     };
 
     // -----------------------------------------------------------------------
     // Dynamic model loader for Settings page
-    // Populates <select> elements with real models from each provider's API.
-    // Auto-loads on page open if an API key is already saved.
     // -----------------------------------------------------------------------
     const WitModels = {
 
         init: function() {
             // Auto-load models for every provider that already has a key saved
             $('.wit-model-select').each(function() {
-                const $select   = $(this);
-                const keyField  = $select.data('key-field');
-                const apiKey    = $('#' + keyField).val().trim();
+                const $select  = $(this);
+                const keyField = $select.data('key-field');
+                const apiKey   = $('#' + keyField).val().trim();
                 if (apiKey) {
                     WitModels.load($select);
                 }
@@ -292,17 +397,13 @@
             });
         },
 
-        /**
-         * Load models from the API and populate the <select>.
-         * @param {jQuery} $select  The .wit-model-select element
-         */
         load: function($select) {
-            const provider  = $select.data('provider');
-            const keyField  = $select.data('key-field');
-            const savedVal  = $select.data('saved');
-            const $status   = $select.siblings('.wit-models-status');
-            const $btn      = $select.siblings('.wit-refresh-models');
-            const apiKey    = $('#' + keyField).val().trim();
+            const provider = $select.data('provider');
+            const keyField = $select.data('key-field');
+            const savedVal = $select.data('saved');
+            const $status  = $select.siblings('.wit-models-status');
+            const $btn     = $select.siblings('.wit-refresh-models');
+            const apiKey   = $('#' + keyField).val().trim();
 
             if (!apiKey) {
                 $status.css('color', '#cc0000').text('Introduce la API key primero y guarda los ajustes.');
@@ -314,8 +415,8 @@
             $status.css('color', '#666').text('Consultando API...');
 
             $.ajax({
-                url: witAdmin.ajax_url,
-                type: 'POST',
+                url:     witAdmin.ajax_url,
+                type:    'POST',
                 timeout: 20000,
                 data: {
                     action:   'wit_fetch_models',
@@ -328,7 +429,8 @@
                     $select.prop('disabled', false);
 
                     if (!response.success) {
-                        $status.css('color', '#cc0000').text('Error: ' + (response.data ? response.data.message : 'Error desconocido'));
+                        $status.css('color', '#cc0000')
+                               .text('Error: ' + (response.data ? response.data.message : 'Error desconocido'));
                         return;
                     }
 
@@ -338,10 +440,9 @@
                         return;
                     }
 
-                    // Rebuild <select> options with the full model list
                     $select.empty();
                     var currentVal = savedVal || '';
-                    var matched = false;
+                    var matched    = false;
 
                     models.forEach(function(model) {
                         var label = (model.name && model.name !== model.id)
@@ -355,7 +456,6 @@
                         $select.append($opt);
                     });
 
-                    // If the previously saved model is no longer in the list, add it at the top
                     if (!matched && currentVal) {
                         $select.prepend(
                             $('<option>').val(currentVal).prop('selected', true)
@@ -363,8 +463,7 @@
                         );
                     }
 
-                    $status.css('color', '#007017')
-                           .text(models.length + ' modelos disponibles.');
+                    $status.css('color', '#007017').text(models.length + ' modelos disponibles.');
                 },
                 error: function(xhr, status, error) {
                     $btn.prop('disabled', false).text('↻ Actualizar lista');
