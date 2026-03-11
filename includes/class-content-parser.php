@@ -96,21 +96,28 @@ class WIT_Content_Parser {
             return $html;
         }
 
-        // --- Load DOM (for detection only, never for output) ---
+        // --- Load DOM ---
         libxml_use_internal_errors(true);
         $dom = new DOMDocument('1.0', 'UTF-8');
-        $wrapper_id = 'wit-root-' . uniqid();
+        // Wrap in a div so we can extract just our content later
         $dom->loadHTML(
-            '<?xml encoding="UTF-8"><div id="' . $wrapper_id . '">' . $html . '</div>',
+            '<?xml encoding="UTF-8"><div id="wit-root">' . $html . '</div>',
             LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD
         );
         libxml_clear_errors();
 
-        $xpath = new DOMXPath($dom);
+        $xpath   = new DOMXPath($dom);
+        $wrapper = $xpath->query('//*[@id="wit-root"]')->item(0);
+
+        if (!$wrapper) {
+            return $html;
+        }
+
         $nodes = $xpath->query(
-            '//div[@id="' . $wrapper_id . '"]//text()'
+            './/text()'
             . '[not(ancestor::script)][not(ancestor::style)]'
-            . '[not(ancestor::code)][not(ancestor::pre)][not(ancestor::textarea)]'
+            . '[not(ancestor::code)][not(ancestor::pre)][not(ancestor::textarea)]',
+            $wrapper
         );
 
         if (!$nodes || $nodes->length === 0) {
@@ -149,18 +156,14 @@ class WIT_Content_Parser {
         // --- Pass 2: batch-translate all unique texts in ONE API call ---
         $translations = $translator->translate_batch($originals, $target_language, $source_language);
 
-        // --- Pass 3: build raw_value → translated_value map ---
-        $replacements = array();
-
+        // --- Pass 3: apply translations directly to DOM text nodes ---
+        // This avoids all str_replace-on-raw-HTML risks (matching inside tag names, attributes, etc.)
         foreach ($nodes as $node) {
             $raw     = $node->nodeValue;
             $trimmed = trim($raw);
 
             if (!array_key_exists($trimmed, $seen)) {
                 continue;
-            }
-            if (array_key_exists($raw, $replacements)) {
-                continue; // already handled (same raw value)
             }
 
             $idx = $seen[$trimmed];
@@ -178,35 +181,27 @@ class WIT_Content_Parser {
             if (preg_match('/^(\s+)/u', $raw, $m)) $leading  = $m[1];
             if (preg_match('/(\s+)$/u', $raw, $m)) $trailing = $m[1];
 
-            $replacements[$raw] = $leading . $t['translation'] . $trailing;
+            // Set translated value directly on the DOM node.
+            // DOMDocument handles entity encoding automatically when serializing.
+            $node->nodeValue = $leading . $t['translation'] . $trailing;
             $this->strings_translated++;
             $this->debug_log[] = '  RECV: "' . mb_substr($t['translation'], 0, 80)
                                . (mb_strlen($t['translation']) > 80 ? '...' : '') . '"';
         }
 
-        if (empty($replacements)) {
+        if ($this->strings_translated === 0) {
             return $html;
         }
 
-        // --- Pass 4: apply str_replace on the ORIGINAL HTML string ---
-        $result  = $html;
-        $changes = 0;
-
-        foreach ($replacements as $original => $translated) {
-            // Primary: search for the HTML-entity-encoded form
-            $search  = htmlspecialchars($original,  ENT_HTML5, 'UTF-8');
-            $replace = htmlspecialchars($translated, ENT_HTML5, 'UTF-8');
-
-            if (strpos($result, $search) !== false) {
-                $result = str_replace($search, $replace, $result);
-                $changes++;
-            } elseif ($search !== $original && strpos($result, $original) !== false) {
-                // Fallback: text stored as raw UTF-8 without entity encoding
-                $result = str_replace($original, $translated, $result);
-                $changes++;
-            }
+        // --- Pass 4: serialize back to HTML from DOM ---
+        // We extract child nodes of the wrapper div, not the div itself, to avoid
+        // adding an extra wrapper element. Block comments (<!-- wp:xxx -->) are
+        // DOMComment nodes and are preserved verbatim by saveHTML().
+        $inner = '';
+        foreach ($wrapper->childNodes as $child) {
+            $inner .= $dom->saveHTML($child);
         }
 
-        return $changes > 0 ? $result : $html;
+        return $inner !== '' ? $inner : $html;
     }
 }
