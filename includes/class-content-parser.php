@@ -182,9 +182,64 @@ class WIT_Content_Parser {
                 }
             }
 
+            // Also collect text from block attrs so that third-party blocks that
+            // store visible text in attrs (e.g. Greenshift's headingContent /
+            // buttonContent) are included in the batch translation request and
+            // subsequently updated to match the translated innerHTML.
+            if (!empty($block['attrs']) && is_array($block['attrs'])) {
+                $this->collect_texts_from_attrs($block['attrs'], $originals);
+            }
+
             // Recurse into nested blocks (columns, groups, etc.)
             if (!empty($block['innerBlocks'])) {
                 $this->collect_texts_from_blocks($block['innerBlocks'], $originals);
+            }
+        }
+    }
+
+    /**
+     * Recursively walk a block attrs array and add any string value that looks
+     * like translatable human-readable text to $originals.
+     *
+     * Strings are skipped when they:
+     * - are shorter than 2 chars
+     * - consist only of digits, punctuation or symbols (colours, IDs, etc.)
+     * - look like URLs (start with http/https/ftp or contain "://")
+     * - look like CSS values ("#" prefix for hex, pure numeric, or known keywords)
+     *
+     * @param array $attrs
+     * @param array &$originals
+     */
+    private function collect_texts_from_attrs($attrs, &$originals) {
+        foreach ($attrs as $value) {
+            if (is_string($value)) {
+                $trimmed = trim($value);
+
+                if (mb_strlen($trimmed) < 2) {
+                    continue;
+                }
+                // Skip numbers / punctuation / symbols only
+                if (preg_match('/^[\d\s\p{P}\p{S}\x{00A0}]+$/u', $trimmed)) {
+                    continue;
+                }
+                // Skip URLs
+                if (preg_match('/^https?:\/\//i', $trimmed) || strpos($trimmed, '://') !== false) {
+                    continue;
+                }
+                // Skip hex colours and CSS-only values
+                if (preg_match('/^#[0-9a-fA-F]{3,8}$/', $trimmed)) {
+                    continue;
+                }
+                // Skip values that contain no letters (e.g. "0px", "46.60", "flex-start")
+                if (!preg_match('/\p{L}/u', $trimmed)) {
+                    continue;
+                }
+
+                if (!array_key_exists($trimmed, $originals)) {
+                    $originals[$trimmed] = count($originals);
+                }
+            } elseif (is_array($value)) {
+                $this->collect_texts_from_attrs($value, $originals);
             }
         }
     }
@@ -235,8 +290,26 @@ class WIT_Content_Parser {
     }
 
     /**
-     * Recursively apply a translation map to block innerContent HTML fragments.
-     * Block comment attrs (the JSON inside <!-- wp:... -->) are NOT modified.
+     * Recursively apply a translation map to block innerContent and attrs.
+     *
+     * innerContent HTML fragments are translated via text-node replacement.
+     * Block attrs are also updated: any string value that exactly matches a
+     * key in $map is replaced with the translation.
+     *
+     * Why attrs must also be updated:
+     * Third-party blocks (e.g. Greenshift's greenshift-blocks/heading,
+     * greenshift-blocks/button) store the visible text directly in block
+     * comment attrs — e.g. "headingContent":"Original text",
+     * "buttonContent":"Original text". Gutenberg's block validation calls the
+     * block's JS save() function with those attrs to produce expected HTML,
+     * then compares the result against the stored innerHTML. If we translate
+     * innerHTML but leave attrs with the original language, the comparison
+     * fails and the editor shows "El bloque contiene contenido inesperado."
+     *
+     * Safety: $map keys come exclusively from HTML text nodes extracted via
+     * DOMDocument. They will never contain URLs, hex colours, CSS values,
+     * numeric IDs or other non-text attr values, so the attr walk below
+     * will only ever replace genuinely translatable text.
      *
      * @param array $blocks
      * @param array $map    original_text => translated_text
@@ -256,16 +329,50 @@ class WIT_Content_Parser {
             }
             $block['innerContent'] = $new_inner_content;
 
+            // Update block attrs so they stay in sync with the translated innerHTML.
+            // This is required for blocks that store text in attrs (headingContent,
+            // buttonContent, etc.) and use those attrs as the source of truth when
+            // Gutenberg re-renders the block for validation.
+            if (!empty($block['attrs']) && is_array($block['attrs'])) {
+                $block['attrs'] = $this->apply_map_to_attrs($block['attrs'], $map);
+            }
+
             // Recurse into nested blocks
             if (!empty($block['innerBlocks'])) {
                 $block['innerBlocks'] = $this->apply_map_to_blocks($block['innerBlocks'], $map);
             }
-
-            // Block attrs (JSON in block comment) are intentionally left untouched.
-            // Modifying them without also updating the corresponding HTML attributes
-            // in innerContent would cause Gutenberg block validation failures.
         }
         return $blocks;
+    }
+
+    /**
+     * Recursively walk a block attrs array and replace any string value whose
+     * trimmed form exactly matches a key in $map.
+     *
+     * Only exact full-string matches are replaced, which means:
+     * - URLs  ("https://example.com/page")  → not in $map → untouched ✓
+     * - Colours ("#ffffff")                 → not in $map → untouched ✓
+     * - CSS / alignment ("flex-start")      → not in $map → untouched ✓
+     * - Block IDs ("gsbp-3adf472b-d320")    → not in $map → untouched ✓
+     * - Translatable text ("Original text") → in $map     → replaced  ✓
+     *
+     * @param array $attrs
+     * @param array $map   original_text => translated_text
+     * @return array
+     */
+    private function apply_map_to_attrs($attrs, $map) {
+        foreach ($attrs as $key => &$value) {
+            if (is_string($value)) {
+                $trimmed = trim($value);
+                if ($trimmed !== '' && isset($map[$trimmed])) {
+                    $value = $map[$trimmed];
+                }
+            } elseif (is_array($value)) {
+                $value = $this->apply_map_to_attrs($value, $map);
+            }
+            // int, float, bool, null — left untouched
+        }
+        return $attrs;
     }
 
     /**
