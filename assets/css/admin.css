@@ -222,6 +222,31 @@
     100% { transform: rotate(360deg); }
 }
 
+/* Background-processing state for translate buttons */
+.wit-backgrounded {
+    background: #f0ad00 !important;
+    border-color: #c87d00 !important;
+    color: #fff !important;
+    animation: wit-pulse 1.6s ease-in-out infinite;
+    cursor: wait !important;
+}
+
+@keyframes wit-pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.65; }
+}
+
+/* Hint text shown under the button while translating in the background */
+.wit-bg-hint {
+    display: block;
+    margin-top: 6px;
+    font-size: 12px;
+    color: #646970;
+    font-style: italic;
+    line-height: 1.4;
+    max-width: 280px;
+}
+
 /* Success/Error messages */
 .wit-message {
     padding: 10px 15px;
