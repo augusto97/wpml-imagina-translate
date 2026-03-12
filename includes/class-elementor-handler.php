@@ -148,8 +148,14 @@ class WIT_Elementor_Handler {
      * @param string $translated_json
      */
     private function copy_elementor_meta($source_id, $target_id, $translated_json) {
-        // Save translated content
-        update_post_meta($target_id, '_elementor_data', $translated_json);
+        // Elementor itself calls wp_slash() before update_post_meta() to preserve
+        // the JSON structure through WordPress's internal wp_unslash() call.
+        // Without wp_slash(), PHP's stripslashes() (called by wp_unslash inside
+        // update_post_meta) converts any JSON backslash sequence to just the
+        // following character: \n → n, \t → t, \r → r, \" → ", \\ → \, etc.
+        // This is why a trailing newline from the AI response (encoded as \n in
+        // the JSON) was showing up as a literal "n" at the end of translated text.
+        update_post_meta($target_id, '_elementor_data', wp_slash($translated_json));
 
         // Copy non-translatable structural meta
         $keys_to_copy = array(
