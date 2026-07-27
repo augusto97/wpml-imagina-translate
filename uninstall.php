@@ -21,8 +21,13 @@ function wit_uninstall_site() {
     global $wpdb;
 
     delete_option('wit_settings');
+    delete_option('wit_db_version');
 
-    $wpdb->query("DROP TABLE IF EXISTS {$wpdb->prefix}wit_translation_logs");
+    wp_clear_scheduled_hook('wit_process_queue');
+
+    foreach (array('wit_translation_logs', 'wit_translation_memory', 'wit_queue') as $table) {
+        $wpdb->query("DROP TABLE IF EXISTS {$wpdb->prefix}{$table}");
+    }
 
     // Job status transients are named wit_job_{post_id}_{lang}. They expire on
     // their own, but deleting the plugin should not leave rows behind.

@@ -52,6 +52,22 @@ class WIT_Translator_Engine {
     private $api_key;
     private $model;
 
+    /** @var WIT_Glossary|null Lazily built. */
+    private $glossary = null;
+
+    /**
+     * Where the translations of the last call came from.
+     *
+     * @var array{glossary:int,memory:int,api:int,input_tokens:int,output_tokens:int}
+     */
+    private $usage = array(
+        'glossary'      => 0,
+        'memory'        => 0,
+        'api'           => 0,
+        'input_tokens'  => 0,
+        'output_tokens' => 0,
+    );
+
     public function __construct() {
         $this->settings = WIT_Settings::instance()->get_settings();
         $this->provider = $this->settings['ai_provider'];
@@ -88,20 +104,74 @@ class WIT_Translator_Engine {
      * @return array{translation:string,error:string|null}
      */
     public function translate($text, $target_language, $source_language = '') {
-        if (empty($this->api_key)) {
-            return $this->error(__('API key no configurada', 'wpml-imagina-translate'));
-        }
         if (trim((string) $text) === '') {
             return $this->error(__('Texto vacío', 'wpml-imagina-translate'));
         }
 
-        $prompt = str_replace(
-            array('{target_language}', '{source_language}'),
-            array($this->get_language_name($target_language), $this->get_language_name($source_language)),
-            $this->settings['translation_prompt']
-        );
+        // A glossary rule covering the whole string settles it without a
+        // request, which is both free and perfectly consistent.
+        $forced = $this->glossary()->resolve($text, $target_language);
+        if ($forced !== null) {
+            $this->usage['glossary']++;
+            return array('translation' => $forced, 'error' => null);
+        }
 
-        return $this->request($text, $prompt);
+        $memory = WIT_Translation_Memory::instance();
+        $hits   = $memory->get_many(array($text), $source_language, $target_language);
+
+        if (isset($hits[$text])) {
+            $this->usage['memory']++;
+            return array('translation' => $hits[$text], 'error' => null);
+        }
+
+        if (empty($this->api_key)) {
+            return $this->error(__('API key no configurada', 'wpml-imagina-translate'));
+        }
+
+        $target_name = $this->get_language_name($target_language);
+        $prompt      = $this->single_prompt($target_name, $this->get_language_name($source_language))
+                     . $this->glossary()->prompt_section(array($text), $target_language);
+
+        $result = $this->request($text, $prompt);
+
+        if (empty($result['error']) && $result['translation'] !== '') {
+            $this->usage['api']++;
+            $memory->store_many(
+                array($text => $result['translation']),
+                $source_language,
+                $target_language,
+                $this->provider,
+                $this->model
+            );
+        }
+
+        return $result;
+    }
+
+    /**
+     * Lazily built glossary.
+     *
+     * @return WIT_Glossary
+     */
+    private function glossary() {
+        if ($this->glossary === null) {
+            $this->glossary = new WIT_Glossary();
+        }
+
+        return $this->glossary;
+    }
+
+    /**
+     * Where the translations produced so far came from.
+     *
+     * Token counts come straight from each provider's own `usage` field. No
+     * price is applied: published rates change often enough that a hardcoded
+     * table would report confidently wrong numbers.
+     *
+     * @return array{glossary:int,memory:int,api:int,input_tokens:int,output_tokens:int}
+     */
+    public function get_usage() {
+        return $this->usage;
     }
 
     // -----------------------------------------------------------------------
@@ -121,32 +191,80 @@ class WIT_Translator_Engine {
             return array();
         }
 
-        if (empty($this->api_key)) {
-            $error = __('API key no configurada', 'wpml-imagina-translate');
-            $out   = array();
-            foreach ($texts as $i => $unused) {
-                $out[$i] = $this->error($error);
+        $out      = array();
+        $pending  = array();
+        $glossary = $this->glossary();
+
+        // Stage 1 — glossary rules that cover an entire string.
+        foreach ($texts as $i => $text) {
+            $forced = $glossary->resolve($text, $target_language);
+
+            if ($forced !== null) {
+                $out[$i] = array('translation' => $forced, 'error' => null);
+                $this->usage['glossary']++;
+                continue;
             }
-            return $out;
+
+            $pending[$i] = $text;
         }
 
-        $target_name = $this->get_language_name($target_language);
-        $source_name = $this->get_language_name($source_language);
+        // Stage 2 — strings already translated in this language pair before.
+        $memory = WIT_Translation_Memory::instance();
 
-        $results = array();
-        foreach ($this->chunk($texts) as $chunk) {
-            $results += $this->translate_chunk($chunk, $target_name, $source_name);
+        if (!empty($pending)) {
+            $hits = $memory->get_many(array_values($pending), $source_language, $target_language);
+
+            foreach ($pending as $i => $text) {
+                if (isset($hits[$text])) {
+                    $out[$i] = array('translation' => $hits[$text], 'error' => null);
+                    $this->usage['memory']++;
+                    unset($pending[$i]);
+                }
+            }
         }
 
-        // Guarantee that every requested index is present in the response.
-        $out = array();
+        // Stage 3 — whatever is genuinely new goes to the provider.
+        if (!empty($pending)) {
+            if (empty($this->api_key)) {
+                $error = __('API key no configurada', 'wpml-imagina-translate');
+                foreach ($pending as $i => $unused) {
+                    $out[$i] = $this->error($error);
+                }
+            } else {
+                $target_name = $this->get_language_name($target_language);
+                $source_name = $this->get_language_name($source_language);
+
+                $results = array();
+                foreach ($this->chunk($pending) as $chunk) {
+                    $results += $this->translate_chunk($chunk, $target_name, $source_name, $target_language);
+                }
+
+                $store = array();
+
+                foreach ($pending as $i => $text) {
+                    $out[$i] = isset($results[$i])
+                        ? $results[$i]
+                        : $this->error(__('Sin respuesta del proveedor', 'wpml-imagina-translate'));
+
+                    if (empty($out[$i]['error']) && $out[$i]['translation'] !== '') {
+                        $this->usage['api']++;
+                        $store[$text] = $out[$i]['translation'];
+                    }
+                }
+
+                $memory->store_many($store, $source_language, $target_language, $this->provider, $this->model);
+            }
+        }
+
+        // Return in the caller's original key order.
+        $ordered = array();
         foreach ($texts as $i => $unused) {
-            $out[$i] = isset($results[$i])
-                ? $results[$i]
+            $ordered[$i] = isset($out[$i])
+                ? $out[$i]
                 : $this->error(__('Sin respuesta del proveedor', 'wpml-imagina-translate'));
         }
 
-        return $out;
+        return $ordered;
     }
 
     /**
@@ -193,12 +311,19 @@ class WIT_Translator_Engine {
      * @param string $source_name Human-readable source language.
      * @return array Same keys as $chunk.
      */
-    private function translate_chunk($chunk, $target_name, $source_name) {
+    private function translate_chunk($chunk, $target_name, $source_name, $target_language = '') {
         $keys = array_keys($chunk);
+
+        // Glossary terms occurring inside these strings are appended to the
+        // prompt, scoped to this chunk so the instructions stay short.
+        $glossary_section = $this->glossary()->prompt_section(array_values($chunk), $target_language);
 
         // Single item: no batching protocol needed, avoids marker overhead.
         if (count($keys) === 1) {
-            $result = $this->request(reset($chunk), $this->single_prompt($target_name, $source_name));
+            $result = $this->request(
+                reset($chunk),
+                $this->single_prompt($target_name, $source_name) . $glossary_section
+            );
             return array($keys[0] => $result);
         }
 
@@ -209,7 +334,10 @@ class WIT_Translator_Engine {
             $payload[] = '[[[' . $position . ']]]' . "\n" . $text;
         }
 
-        $response = $this->request(implode("\n", $payload), $this->batch_prompt($target_name, $source_name));
+        $response = $this->request(
+            implode("\n", $payload),
+            $this->batch_prompt($target_name, $source_name) . $glossary_section
+        );
 
         if (!empty($response['error']) || trim($response['translation']) === '') {
             $error = !empty($response['error'])
@@ -239,7 +367,7 @@ class WIT_Translator_Engine {
         // Retry anything the model dropped, one string at a time. This turns a
         // partial batch failure into a slower success rather than lost content.
         foreach ($missing as $index => $text) {
-            $single = $this->request($text, $this->single_prompt($target_name, $source_name));
+            $single = $this->request($text, $this->single_prompt($target_name, $source_name) . $glossary_section);
             $out[$index] = (empty($single['error']) && trim($single['translation']) !== '')
                 ? array('translation' => $single['translation'], 'error' => null)
                 : $this->error(
@@ -436,6 +564,8 @@ class WIT_Translator_Engine {
             return $this->error(__('Respuesta inválida de OpenAI', 'wpml-imagina-translate'));
         }
 
+        $this->record_tokens($decoded);
+
         return array('translation' => trim($decoded['choices'][0]['message']['content']), 'error' => null);
     }
 
@@ -477,6 +607,8 @@ class WIT_Translator_Engine {
         if (!isset($decoded['content'][0]['text'])) {
             return $this->error(__('Respuesta inválida de Claude', 'wpml-imagina-translate'));
         }
+
+        $this->record_tokens($decoded);
 
         // A truncated reply would silently drop trailing batch items.
         if (isset($decoded['stop_reason']) && $decoded['stop_reason'] === 'max_tokens') {
@@ -570,6 +702,8 @@ class WIT_Translator_Engine {
         if (empty($chunks)) {
             return $this->error(__('Respuesta inválida de Gemini', 'wpml-imagina-translate'));
         }
+
+        $this->record_tokens($decoded);
 
         if (isset($candidate['finishReason']) && $candidate['finishReason'] === 'MAX_TOKENS') {
             return $this->error(__('La respuesta de Gemini se truncó (MAX_TOKENS)', 'wpml-imagina-translate'));
@@ -808,6 +942,38 @@ class WIT_Translator_Engine {
         }
 
         return ucfirst($code);
+    }
+
+    /**
+     * Accumulate token counts from a provider response.
+     *
+     * Each provider names the fields differently; all three report them.
+     *
+     * @param array $decoded Decoded response body.
+     */
+    private function record_tokens(array $decoded) {
+        // OpenAI: usage.prompt_tokens / completion_tokens
+        if (isset($decoded['usage']['prompt_tokens'])) {
+            $this->usage['input_tokens']  += (int) $decoded['usage']['prompt_tokens'];
+            $this->usage['output_tokens'] += isset($decoded['usage']['completion_tokens'])
+                ? (int) $decoded['usage']['completion_tokens'] : 0;
+            return;
+        }
+
+        // Claude: usage.input_tokens / output_tokens
+        if (isset($decoded['usage']['input_tokens'])) {
+            $this->usage['input_tokens']  += (int) $decoded['usage']['input_tokens'];
+            $this->usage['output_tokens'] += isset($decoded['usage']['output_tokens'])
+                ? (int) $decoded['usage']['output_tokens'] : 0;
+            return;
+        }
+
+        // Gemini: usageMetadata.promptTokenCount / candidatesTokenCount
+        if (isset($decoded['usageMetadata']['promptTokenCount'])) {
+            $this->usage['input_tokens']  += (int) $decoded['usageMetadata']['promptTokenCount'];
+            $this->usage['output_tokens'] += isset($decoded['usageMetadata']['candidatesTokenCount'])
+                ? (int) $decoded['usageMetadata']['candidatesTokenCount'] : 0;
+        }
     }
 
     /**

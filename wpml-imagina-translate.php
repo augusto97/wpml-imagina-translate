@@ -91,12 +91,15 @@ class WPML_Imagina_Translate {
         require_once WIT_PLUGIN_DIR . 'includes/class-settings.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-html-translator.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-field-rules.php';
+        require_once WIT_PLUGIN_DIR . 'includes/class-glossary.php';
+        require_once WIT_PLUGIN_DIR . 'includes/class-translation-memory.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-translator-engine.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-content-parser.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-elementor-handler.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-wpml-integration.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-translation-manager.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-batch-processor.php';
+        require_once WIT_PLUGIN_DIR . 'includes/class-queue.php';
 
         // Admin classes
         if (is_admin()) {
@@ -132,10 +135,61 @@ class WPML_Imagina_Translate {
         WIT_Settings::instance();
         WIT_WPML_Integration::instance();
 
+        // Registers the cron handler; must run on every request, not only in
+        // the admin, because WP-Cron fires on front-end requests.
+        WIT_Queue::instance();
+
+        $this->maybe_upgrade();
+
         if (is_admin()) {
             WIT_Translation_Dashboard::instance();
             WIT_Admin_Ajax::instance();
         }
+    }
+
+    /**
+     * Create or update the plugin's tables when the version changes.
+     *
+     * The activation hook does not run on plugin updates, so existing installs
+     * would otherwise never get the translation-memory and queue tables.
+     */
+    private function maybe_upgrade() {
+        if (get_option('wit_db_version') === WIT_VERSION) {
+            return;
+        }
+
+        self::install_tables();
+
+        update_option('wit_db_version', WIT_VERSION, true);
+    }
+
+    /**
+     * Create every table the plugin owns.
+     */
+    public static function install_tables() {
+        global $wpdb;
+
+        $collate = $wpdb->get_charset_collate();
+
+        $logs = "CREATE TABLE {$wpdb->prefix}wit_translation_logs (
+            id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+            post_id bigint(20) NOT NULL,
+            source_lang varchar(10) NOT NULL,
+            target_lang varchar(10) NOT NULL,
+            ai_provider varchar(50) NOT NULL,
+            status varchar(20) NOT NULL,
+            message text,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            KEY post_id (post_id),
+            KEY status (status)
+        ) {$collate};";
+
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+        dbDelta($logs);
+        dbDelta(WIT_Translation_Memory::schema());
+        dbDelta(WIT_Queue::schema());
     }
 
     /**
@@ -163,6 +217,7 @@ class WPML_Imagina_Translate {
             'gemini_api_key' => '',
             'gemini_model' => 'gemini-2.5-flash',
             'translation_prompt' => 'Translate the following text to {target_language}. Return ONLY the translated text, nothing else. Do not add quotes, explanations, or formatting. Keep proper nouns, brand names, and technical terms unchanged.',
+            'glossary' => '',
             'translate_meta_fields' => true,
             'meta_fields_list' => '_yoast_wpseo_title,_yoast_wpseo_metadesc,_excerpt',
             'batch_size' => 5,
@@ -173,34 +228,15 @@ class WPML_Imagina_Translate {
         // being loaded on every front-end request.
         add_option('wit_settings', $default_settings, '', false);
 
-        // Create translation logs table
-        global $wpdb;
-        $table_name = $wpdb->prefix . 'wit_translation_logs';
-        $charset_collate = $wpdb->get_charset_collate();
-
-        $sql = "CREATE TABLE IF NOT EXISTS $table_name (
-            id bigint(20) NOT NULL AUTO_INCREMENT,
-            post_id bigint(20) NOT NULL,
-            source_lang varchar(10) NOT NULL,
-            target_lang varchar(10) NOT NULL,
-            ai_provider varchar(50) NOT NULL,
-            status varchar(20) NOT NULL,
-            message text,
-            created_at datetime DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY  (id),
-            KEY post_id (post_id),
-            KEY status (status)
-        ) $charset_collate;";
-
-        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-        dbDelta($sql);
+        self::install_tables();
+        update_option('wit_db_version', WIT_VERSION, true);
     }
 
     /**
      * Plugin deactivation
      */
     public function deactivate() {
-        // Clear any scheduled cron jobs if we add them later
+        wp_clear_scheduled_hook(WIT_Queue::CRON_HOOK);
     }
 }
 

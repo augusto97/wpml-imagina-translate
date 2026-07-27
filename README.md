@@ -10,7 +10,9 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 
 ### Core Features
 - **Multi-proveedor de IA**: OpenAI (GPT-4, GPT-4o), Anthropic Claude, Google Gemini
-- **Batch Translation**: Traduce múltiples posts de una vez
+- **Memoria de traducción**: no vuelve a pagar por una frase ya traducida, y garantiza que se traduzca igual en todo el sitio
+- **Glosario**: términos de marca que nunca se traducen y traducciones fijas por idioma
+- **Cola en segundo plano**: encolas cientos de páginas y cierras el navegador; el servidor sigue
 - **Smart Content Parser**: Preserva bloques de Gutenberg, HTML, y estructura
 - **Meta Fields**: Traduce automáticamente SEO (Yoast, RankMath), excerpts, y campos personalizados
 - **Dashboard Intuitivo**: Interfaz simple para gestionar traducciones
@@ -90,10 +92,6 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 - `gpt-4o-2024-11-20` - Snapshot estable (Noviembre 2024)
 - `o3-mini` - Modelo de razonamiento (para tareas complejas)
 
-**Costos aproximados:**
-- GPT-4o Mini: ~$0.15 por millón de tokens (~$0.01 por página)
-- GPT-4o: ~$2.50 por millón de tokens (~$0.15 por página)
-- o3-mini: ~$1.10 por millón de tokens
 
 #### Anthropic Claude
 1. Ve a [console.anthropic.com](https://console.anthropic.com)
@@ -105,10 +103,6 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 - `claude-sonnet-4-5-20250929` - Mejor modelo de coding del mundo
 - `claude-opus-4-5-20251101` - Máxima calidad e inteligencia
 
-**Costos aproximados:**
-- Claude 4.5 Haiku: $1/$5 por millón de tokens (input/output)
-- Claude 4.5 Sonnet: $3/$15 por millón de tokens
-- Claude 4.5 Opus: $5/$25 por millón de tokens (⅓ del precio de Opus 4.1)
 
 #### Google Gemini
 1. Ve a [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
@@ -121,11 +115,12 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 - `gemini-3-flash-preview` - Más nuevo (Preview)
 - `gemini-3-pro-preview` - Más potente (Preview)
 
-**Costos aproximados:**
-- Gemini 2.5 Flash: GRATIS hasta 15 req/min
-- Gemini 2.5 Pro: ~$1.25 por millón de tokens
-- Gemini 3 Flash Preview: GRATIS (mientras está en preview)
-- Gemini 3 Pro Preview: GRATIS (mientras está en preview)
+
+> **Sobre costes.** El plugin no muestra precios: las tarifas de los proveedores
+> cambian con frecuencia y una tabla fija daría cifras equivocadas. Lo que sí
+> registra son los **tokens consumidos** que devuelve cada API, para que puedas
+> multiplicarlos por la tarifa vigente de tu proveedor. La memoria de traducción
+> y el glosario reducen ese consumo directamente.
 
 ### Configuración Avanzada
 
@@ -341,6 +336,16 @@ Cosas que el plugin **no** hace todavía, para que no te pillen por sorpresa:
 - **Elementor Global Classes** (v4): son por Kit y no viven en `_elementor_data`;
   si WPML asigna un Kit distinto por idioma habrá que revisarlas a mano.
 
+## 🧪 Tests
+
+```bash
+php tests/run.php
+```
+
+No necesita WordPress, ni base de datos, ni Composer. Cubre el tokenizador de
+HTML (fidelidad byte a byte, entidades, aislamiento de atributos), las reglas de
+campos traducibles, el glosario y el protocolo de lote.
+
 ## 🔧 Notas para desarrolladores
 
 Filtros disponibles:
@@ -351,6 +356,9 @@ add_filter( 'wit_new_translation_status', fn() => 'publish' );
 
 // Registrar en el log cada cadena enviada y recibida (por defecto solo con WP_DEBUG)
 add_filter( 'wit_verbose_debug', '__return_true' );
+
+// No crear términos que falten al traducir (por defecto sí se crean)
+add_filter( 'wit_create_missing_terms', '__return_false' );
 ```
 
 Arquitectura:
@@ -363,3 +371,6 @@ Arquitectura:
 | `WIT_Content_Parser` | Gutenberg (`parse_blocks`/`serialize_blocks`) y editor clásico |
 | `WIT_Elementor_Handler` | `_elementor_data`, incluidos los widgets *atomic* de la v4 |
 | `WIT_WPML_Integration` | Creación y vinculación de traducciones vía hooks de WPML |
+| `WIT_Translation_Memory` | Caché de cadenas ya traducidas por par de idiomas |
+| `WIT_Glossary` | Términos protegidos y traducciones fijas |
+| `WIT_Queue` | Cola drenada por WP-Cron para lotes grandes |

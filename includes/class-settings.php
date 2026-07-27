@@ -121,6 +121,8 @@ class WIT_Settings {
         }
 
         $sanitized['translation_prompt']        = isset($input['translation_prompt']) ? sanitize_textarea_field($input['translation_prompt']) : '';
+        // The glossary is plain text, but must keep its newlines: they separate rules.
+        $sanitized['glossary']                  = isset($input['glossary']) ? sanitize_textarea_field($input['glossary']) : '';
         $sanitized['translate_meta_fields']     = !empty($input['translate_meta_fields']);
         $sanitized['enable_translation_memory'] = !empty($input['enable_translation_memory']);
         $sanitized['batch_size']                = isset($input['batch_size']) ? min(50, max(1, absint($input['batch_size']))) : 5;
@@ -421,6 +423,29 @@ class WIT_Settings {
                     </tr>
                     <tr>
                         <th scope="row">
+                            <label for="glossary"><?php _e('Glosario', 'wpml-imagina-translate'); ?></label>
+                        </th>
+                        <td>
+                            <textarea name="<?php echo esc_attr($this->option_name); ?>[glossary]"
+                                      id="glossary"
+                                      rows="8"
+                                      class="large-text code"
+                                      spellcheck="false"
+                                      placeholder="Imagina&#10;Servicios = Services&#10;[en] Inicio = Home"><?php echo esc_textarea($settings['glossary']); ?></textarea>
+                            <p class="description">
+                                <?php _e('Una regla por línea. Las reglas tienen prioridad sobre el criterio de la IA.', 'wpml-imagina-translate'); ?>
+                            </p>
+                            <ul class="description" style="margin-left:1.5em;list-style:disc;">
+                                <li><code>Imagina</code> — <?php _e('nunca se traduce, en ningún idioma', 'wpml-imagina-translate'); ?></li>
+                                <li><code>Servicios = Services</code> — <?php _e('traducción fija en todos los idiomas', 'wpml-imagina-translate'); ?></li>
+                                <li><code>[en] Inicio = Home</code> — <?php _e('solo para inglés', 'wpml-imagina-translate'); ?></li>
+                                <li><code>[fr,de] Contacto = Kontakt</code> — <?php _e('para varios idiomas', 'wpml-imagina-translate'); ?></li>
+                                <li><code># comentario</code> — <?php _e('las líneas que empiezan por # se ignoran', 'wpml-imagina-translate'); ?></li>
+                            </ul>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th scope="row">
                             <label for="enable_translation_memory">
                                 <?php _e('Memoria de Traducción', 'wpml-imagina-translate'); ?>
                             </label>
@@ -432,8 +457,32 @@ class WIT_Settings {
                                        id="enable_translation_memory"
                                        value="1"
                                        <?php checked($settings['enable_translation_memory'], true); ?>>
-                                <?php _e('Activar caché de traducciones (próximamente)', 'wpml-imagina-translate'); ?>
+                                <?php _e('Reutilizar traducciones ya realizadas', 'wpml-imagina-translate'); ?>
                             </label>
+                            <p class="description">
+                                <?php _e('Evita pagar dos veces por la misma frase y garantiza que se traduzca igual en todo el sitio. Recomendado.', 'wpml-imagina-translate'); ?>
+                            </p>
+                            <?php
+                            $memory_stats = WIT_Translation_Memory::instance()->stats();
+                            if ($memory_stats['entries'] > 0) :
+                                ?>
+                                <p>
+                                    <strong><?php
+                                        printf(
+                                            /* translators: 1: stored entries, 2: times reused */
+                                            esc_html__('%1$s cadenas guardadas, reutilizadas %2$s veces.', 'wpml-imagina-translate'),
+                                            esc_html(number_format_i18n($memory_stats['entries'])),
+                                            esc_html(number_format_i18n($memory_stats['reuses']))
+                                        );
+                                    ?></strong>
+                                </p>
+                                <p>
+                                    <button type="button" class="button" id="wit-clear-memory">
+                                        <?php esc_html_e('Vaciar memoria', 'wpml-imagina-translate'); ?>
+                                    </button>
+                                    <span id="wit-clear-memory-status"></span>
+                                </p>
+                            <?php endif; ?>
                         </td>
                     </tr>
                 </table>
@@ -457,6 +506,7 @@ class WIT_Settings {
             'gemini_api_key' => '',
             'gemini_model' => 'gemini-2.5-flash',
             'translation_prompt' => 'Translate the following text to {target_language}. Return ONLY the translated text, nothing else. Do not add quotes, explanations, or formatting. Keep proper nouns, brand names, and technical terms unchanged.',
+            'glossary' => '',
             'translate_meta_fields' => true,
             'meta_fields_list' => '_yoast_wpseo_title,_yoast_wpseo_metadesc,_excerpt',
             'batch_size' => 5,

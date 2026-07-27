@@ -23,6 +23,98 @@ class WIT_Admin_Ajax {
         add_action('wp_ajax_wit_check_translation_status', array($this, 'ajax_check_translation_status'));
         add_action('wp_ajax_wit_test_connection',          array($this, 'ajax_test_connection'));
         add_action('wp_ajax_wit_fetch_models',             array($this, 'ajax_fetch_models'));
+        add_action('wp_ajax_wit_enqueue_batch',            array($this, 'ajax_enqueue_batch'));
+        add_action('wp_ajax_wit_queue_status',             array($this, 'ajax_queue_status'));
+        add_action('wp_ajax_wit_cancel_queue',             array($this, 'ajax_cancel_queue'));
+        add_action('wp_ajax_wit_clear_memory',             array($this, 'ajax_clear_memory'));
+    }
+
+    /**
+     * Queue a set of posts for background translation.
+     */
+    public function ajax_enqueue_batch() {
+        $this->verify_nonce();
+
+        $target_language = isset($_POST['target_language'])
+            ? sanitize_text_field(wp_unslash($_POST['target_language']))
+            : '';
+
+        if (!WIT_WPML_Integration::instance()->is_active_language($target_language)) {
+            wp_send_json_error(array('message' => __('El idioma destino no está activo en WPML', 'wpml-imagina-translate')));
+        }
+
+        $post_ids = isset($_POST['post_ids']) ? (array) wp_unslash($_POST['post_ids']) : array();
+        $post_ids = array_filter(array_map('absint', $post_ids));
+
+        if (empty($post_ids)) {
+            wp_send_json_error(array('message' => __('No se seleccionó ningún post', 'wpml-imagina-translate')));
+        }
+
+        // Per-post capability is enforced inside enqueue(), while a real user
+        // is present; cron has none.
+        $result = WIT_Queue::instance()->enqueue($post_ids, $target_language);
+
+        if ($result['queued'] === 0) {
+            wp_send_json_error(array(
+                'message' => __('No se pudo encolar ningún post (ya estaban en cola o sin permisos)', 'wpml-imagina-translate'),
+            ));
+        }
+
+        wp_send_json_success($result);
+    }
+
+    /**
+     * Progress of the queue, optionally for one batch.
+     */
+    public function ajax_queue_status() {
+        $this->verify_nonce();
+
+        if (!current_user_can('edit_posts')) {
+            wp_send_json_error(array('message' => __('Sin permisos', 'wpml-imagina-translate')));
+        }
+
+        $batch_id = isset($_POST['batch_id']) ? sanitize_text_field(wp_unslash($_POST['batch_id'])) : '';
+
+        // Recover items abandoned by a cron pass that died mid-run.
+        $queue = WIT_Queue::instance();
+        $status = $queue->status($batch_id);
+
+        // Keep nudging cron: on low-traffic sites nothing else would.
+        if ($status['pending'] > 0) {
+            $queue->schedule();
+        }
+
+        wp_send_json_success($status);
+    }
+
+    /**
+     * Discard everything still waiting.
+     */
+    public function ajax_cancel_queue() {
+        $this->verify_nonce();
+
+        if (!current_user_can('edit_posts')) {
+            wp_send_json_error(array('message' => __('Sin permisos', 'wpml-imagina-translate')));
+        }
+
+        $removed = WIT_Queue::instance()->cancel_pending();
+
+        wp_send_json_success(array('removed' => $removed));
+    }
+
+    /**
+     * Empty the translation memory.
+     */
+    public function ajax_clear_memory() {
+        $this->verify_nonce();
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('No tienes permisos', 'wpml-imagina-translate')));
+        }
+
+        $removed = WIT_Translation_Memory::instance()->clear();
+
+        wp_send_json_success(array('removed' => $removed));
     }
 
     /**

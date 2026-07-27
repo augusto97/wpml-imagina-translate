@@ -105,6 +105,28 @@ if (!defined('ABSPATH')) {
                 </button>
                 <span id="wit-selected-count">0 seleccionados</span>
             </div>
+            <p class="description">
+                <?php _e('La traducción por lotes se procesa en el servidor. Puedes cerrar esta página mientras se completa.', 'wpml-imagina-translate'); ?>
+            </p>
+
+            <?php
+            $queue_status = WIT_Queue::instance()->status();
+            if ($queue_status['pending'] > 0 || $queue_status['processing'] > 0) :
+                ?>
+                <div class="notice notice-info inline" style="margin:12px 0;">
+                    <p>
+                        <strong><?php esc_html_e('Hay una traducción en curso.', 'wpml-imagina-translate'); ?></strong>
+                        <?php
+                        printf(
+                            /* translators: 1: pending items, 2: completed items */
+                            esc_html__('%1$s pendientes, %2$s completados.', 'wpml-imagina-translate'),
+                            esc_html(number_format_i18n($queue_status['pending'] + $queue_status['processing'])),
+                            esc_html(number_format_i18n($queue_status['done']))
+                        );
+                        ?>
+                    </p>
+                </div>
+            <?php endif; ?>
 
             <table class="wp-list-table widefat fixed striped">
                 <thead>

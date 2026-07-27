@@ -303,8 +303,10 @@ class WIT_WPML_Integration {
             return $new_post_id;
         }
 
+        $source_language = $this->get_post_language($source_post_id);
+
         $this->link_translation($source_post_id, $new_post_id, $target_language);
-        $this->copy_taxonomies($source_post_id, $new_post_id, $target_language);
+        $this->copy_taxonomies($source_post_id, $new_post_id, $target_language, $source_language);
         $this->copy_featured_image($source_post_id, $new_post_id, $target_language);
 
         return $new_post_id;
@@ -468,7 +470,7 @@ class WIT_WPML_Integration {
      * @param int    $translated_post_id
      * @param string $target_language
      */
-    private function copy_taxonomies($source_post_id, $translated_post_id, $target_language) {
+    private function copy_taxonomies($source_post_id, $translated_post_id, $target_language, $source_language = '') {
         $taxonomies = get_object_taxonomies(get_post_type($source_post_id));
 
         foreach ($taxonomies as $taxonomy) {
@@ -478,20 +480,114 @@ class WIT_WPML_Integration {
                 continue;
             }
 
-            $translated_terms = array();
+            $assign = array();
 
             foreach ($terms as $term_id) {
                 $translated_term_id = apply_filters('wpml_object_id', $term_id, $taxonomy, false, $target_language);
 
                 if ($translated_term_id) {
-                    $translated_terms[] = (int) $translated_term_id;
+                    $assign[] = (int) $translated_term_id;
+                    continue;
                 }
+
+                // No translation yet. Create one so the translated post keeps
+                // its taxonomy: the previous behaviour skipped the term
+                // entirely, which left translations with no categories at all
+                // and broke archives, menus and SEO silently.
+                $created = $this->create_translated_term($term_id, $taxonomy, $target_language, $source_language);
+
+                // Falling back to the source term is still better than leaving
+                // the post uncategorised.
+                $assign[] = $created ? $created : (int) $term_id;
             }
 
-            if (!empty($translated_terms)) {
-                wp_set_object_terms($translated_post_id, $translated_terms, $taxonomy);
+            $assign = array_values(array_unique(array_filter($assign)));
+
+            if (!empty($assign)) {
+                wp_set_object_terms($translated_post_id, $assign, $taxonomy);
             }
         }
+    }
+
+    /**
+     * Create the translation of a term and link it to the original in WPML.
+     *
+     * @param int    $term_id
+     * @param string $taxonomy
+     * @param string $target_language
+     * @param string $source_language
+     * @return int|false New term id, or false when it could not be created.
+     */
+    private function create_translated_term($term_id, $taxonomy, $target_language, $source_language) {
+        $term = get_term($term_id, $taxonomy);
+
+        if (!$term || is_wp_error($term)) {
+            return false;
+        }
+
+        /**
+         * Filter whether missing terms may be created during translation.
+         *
+         * @param bool     $create
+         * @param WP_Term  $term
+         * @param string   $target_language
+         */
+        if (!apply_filters('wit_create_missing_terms', true, $term, $target_language)) {
+            return false;
+        }
+
+        $parser      = new WIT_Content_Parser();
+        $name_result = $parser->translate_title($term->name, $target_language, $source_language);
+        $name        = !empty($name_result['error']) ? $term->name : $name_result['title'];
+
+        $description = '';
+        if ($term->description !== '') {
+            $description_result = $parser->translate_excerpt($term->description, $target_language, $source_language);
+            $description = !empty($description_result['error']) ? $term->description : $description_result['excerpt'];
+        }
+
+        // Translate the parent first so hierarchy survives.
+        $parent = 0;
+        if ($term->parent) {
+            $translated_parent = apply_filters('wpml_object_id', $term->parent, $taxonomy, false, $target_language);
+            $parent = $translated_parent
+                ? (int) $translated_parent
+                : (int) $this->create_translated_term($term->parent, $taxonomy, $target_language, $source_language);
+        }
+
+        $created = wp_insert_term($name, $taxonomy, array(
+            'description' => $description,
+            'parent'      => $parent,
+            // Never collide with an existing slug in another language.
+            'slug'        => sanitize_title($name . '-' . $target_language),
+        ));
+
+        if (is_wp_error($created)) {
+            // A term with this name may already exist unlinked; adopt it.
+            $existing = $created->get_error_data('term_exists');
+            if (!$existing) {
+                return false;
+            }
+            $created = array('term_id' => (int) $existing);
+        }
+
+        $new_term_id = (int) $created['term_id'];
+
+        // Link the new term into the original's translation group.
+        $element_type = apply_filters('wpml_element_type', $taxonomy);
+        $trid         = apply_filters('wpml_element_trid', null, $term_id, $element_type);
+
+        if ($trid) {
+            do_action('wpml_set_element_language_details', array(
+                'element_id'           => $new_term_id,
+                'element_type'         => $element_type,
+                'trid'                 => $trid,
+                'language_code'        => $target_language,
+                'source_language_code' => $source_language ?: $this->get_default_language(),
+            ));
+        }
+
+        return $new_term_id;
     }
 
     /**

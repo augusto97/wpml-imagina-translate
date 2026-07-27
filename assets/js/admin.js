@@ -25,6 +25,41 @@
 
             // Translate single post
             $('.wit-translate-single').on('click', this.translateSingle);
+
+            // Empty the translation memory (settings page)
+            $(document).on('click', '#wit-clear-memory', this.clearMemory);
+        },
+
+        clearMemory: function(e) {
+            e.preventDefault();
+
+            if (!confirm('¿Vaciar la memoria de traducción? Las próximas traducciones volverán a pagarse.')) {
+                return;
+            }
+
+            const $button = $(this);
+            const $status = $('#wit-clear-memory-status');
+
+            $button.prop('disabled', true);
+            $status.text(' Vaciando…');
+
+            $.ajax({
+                url:  witAdmin.ajax_url,
+                type: 'POST',
+                data: { action: 'wit_clear_memory', nonce: witAdmin.nonce },
+                success: function(response) {
+                    $button.prop('disabled', false);
+                    $status.css('color', '#007017').text(
+                        response && response.success
+                            ? ' Memoria vaciada (' + response.data.removed + ' entradas).'
+                            : ' No se pudo vaciar.'
+                    );
+                },
+                error: function() {
+                    $button.prop('disabled', false);
+                    $status.css('color', '#cc0000').text(' Error de red.');
+                }
+            });
         },
 
         handleCheckAll: function() {
@@ -72,8 +107,111 @@
                 return;
             }
 
-            const targetLanguage = $('#target_lang').val();
-            WitAdmin.processBatch(selectedPosts, targetLanguage);
+            WitAdmin.enqueueBatch(selectedPosts, $('#target_lang').val());
+        },
+
+        /**
+         * Hand the selection to the server-side queue.
+         *
+         * The previous implementation looped here in the browser, so closing
+         * the tab abandoned the run. The queue is drained by WP-Cron instead;
+         * this page only reports progress and can be closed at any time.
+         */
+        enqueueBatch: function(postIds, targetLanguage) {
+            const $button = $('#wit-translate-selected');
+            $button.prop('disabled', true);
+
+            $('#wit-progress').show();
+            $('#wit-progress-log').html('');
+            WitAdmin.addLogEntry('Encolando ' + postIds.length + ' posts…', 'processing');
+
+            $.ajax({
+                url:  witAdmin.ajax_url,
+                type: 'POST',
+                data: {
+                    action:          'wit_enqueue_batch',
+                    nonce:           witAdmin.nonce,
+                    post_ids:        postIds,
+                    target_language: targetLanguage
+                },
+                success: function(response) {
+                    if (!response || !response.success) {
+                        const msg = (response && response.data && response.data.message)
+                            ? response.data.message : 'Error desconocido';
+                        WitAdmin.addLogEntry('✗ ' + msg, 'error');
+                        $button.prop('disabled', false);
+                        return;
+                    }
+
+                    const d = response.data;
+                    WitAdmin.addLogEntry(
+                        '✓ ' + d.queued + ' posts en cola' +
+                        (d.skipped ? ' (' + d.skipped + ' omitidos)' : '') +
+                        '. Puedes cerrar esta página: la traducción continúa en el servidor.',
+                        'success'
+                    );
+                    WitAdmin.pollQueue(d.batch_id);
+                },
+                error: function(xhr) {
+                    WitAdmin.addLogEntry('✗ Error de red (HTTP ' + xhr.status + ')', 'error');
+                    $button.prop('disabled', false);
+                }
+            });
+        },
+
+        /**
+         * Report queue progress until nothing is left to do.
+         */
+        pollQueue: function(batchId) {
+            let lastDone = -1;
+
+            const tick = function() {
+                $.ajax({
+                    url:      witAdmin.ajax_url,
+                    type:     'POST',
+                    dataType: 'json',
+                    timeout:  15000,
+                    data: {
+                        action:   'wit_queue_status',
+                        nonce:    witAdmin.nonce,
+                        batch_id: batchId
+                    },
+                    success: function(response) {
+                        if (!response || !response.data) { return; }
+
+                        const s    = response.data;
+                        const done = s.done + s.error;
+
+                        WitAdmin.updateProgress(done, s.total);
+
+                        if (done !== lastDone) {
+                            lastDone = done;
+                            (s.recent || []).slice(0, 5).forEach(function(row) {
+                                if (row.status === 'done') {
+                                    WitAdmin.addLogEntry('✓ ' + row.title, 'success');
+                                } else if (row.status === 'error') {
+                                    WitAdmin.addLogEntry('✗ ' + row.title + ' — ' + row.message, 'error');
+                                }
+                            });
+                        }
+
+                        if (s.pending === 0 && s.processing === 0) {
+                            WitAdmin.addLogEntry('=== COLA COMPLETADA ===', 'success');
+                            WitAdmin.addLogEntry('Traducidos: ' + s.done + ' · Errores: ' + s.error,
+                                s.error > 0 ? 'error' : 'success');
+                            $('#wit-translate-selected').prop('disabled', false);
+                            return;
+                        }
+
+                        setTimeout(tick, 5000);
+                    },
+                    error: function() {
+                        setTimeout(tick, 10000); // transient failure: keep watching
+                    }
+                });
+            };
+
+            tick();
         },
 
         translateSingle: function(e) {
@@ -146,69 +284,6 @@
                     }
                 }
             );
-        },
-
-        processBatch: function(postIds, targetLanguage) {
-            let processed = 0;
-            const total = postIds.length;
-            const results = [];
-
-            // Show progress bar
-            $('#wit-progress').show();
-            $('#wit-progress-log').html('');
-            this.updateProgress(0, total);
-
-            // Disable action buttons
-            $('#wit-translate-selected, #wit-select-all').prop('disabled', true);
-
-            // Process posts sequentially
-            const processNext = () => {
-                if (processed >= total) {
-                    this.onBatchComplete(results);
-                    return;
-                }
-
-                const postId    = postIds[processed];
-                const $row      = $('tr[data-post-id="' + postId + '"]');
-                const postTitle = $row.find('strong').text();
-
-                this.addLogEntry('Traduciendo: ' + postTitle, 'processing');
-
-                this.translatePost(
-                    postId,
-                    targetLanguage,
-                    // ── completion callback ──────────────────────────────────
-                    (success, data) => {
-                        processed++;
-
-                        results.push({
-                            postId:  postId,
-                            title:   postTitle,
-                            success: success,
-                            message: data.message
-                        });
-
-                        if (success) {
-                            this.addLogEntry('✓ ' + postTitle + ' — Traducido exitosamente', 'success');
-                            $row.fadeOut(500, function() { $(this).remove(); });
-                        } else {
-                            this.addLogEntry('✗ ' + postTitle + ' — Error: ' + data.message, 'error');
-                        }
-
-                        this.updateProgress(processed, total);
-                        setTimeout(processNext, 500);
-                    },
-                    // ── backgrounded callback ────────────────────────────────
-                    () => {
-                        this.addLogEntry(
-                            '⏳ ' + postTitle + ' — procesando en segundo plano (la IA puede tardar varios minutos)…',
-                            'processing'
-                        );
-                    }
-                );
-            };
-
-            processNext();
         },
 
         /**
@@ -337,7 +412,7 @@
         },
 
         updateProgress: function(current, total) {
-            const percentage = Math.round((current / total) * 100);
+            const percentage = total > 0 ? Math.round((current / total) * 100) : 0;
             $('.wit-progress-fill').css('width', percentage + '%');
             $('.wit-progress-text').text(current + ' / ' + total);
         },
@@ -352,25 +427,8 @@
 
             $log.append(entry);
             $log.scrollTop($log[0].scrollHeight);
-        },
-
-        onBatchComplete: function(results) {
-            const successful = results.filter(r => r.success).length;
-            const failed     = results.filter(r => !r.success).length;
-
-            this.addLogEntry('', 'success');
-            this.addLogEntry('=== PROCESO COMPLETADO ===', 'success');
-            this.addLogEntry('Total: '     + results.length, 'success');
-            this.addLogEntry('Exitosos: '  + successful,     'success');
-            this.addLogEntry('Fallidos: '  + failed, failed > 0 ? 'error' : 'success');
-
-            // Re-enable buttons
-            $('#wit-translate-selected, #wit-select-all').prop('disabled', false);
-            $('#wit-check-all').prop('checked', false);
-            this.updateSelectedCount();
-
-            alert('Traducción completada!\n\nExitosos: ' + successful + '\nFallidos: ' + failed);
         }
+
     };
 
     // -----------------------------------------------------------------------
