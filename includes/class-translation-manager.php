@@ -37,9 +37,9 @@ class WIT_Translation_Manager {
             );
         }
 
-        $source_language  = $this->wpml_integration->get_post_language($post_id);
-        $elementor        = new WIT_Elementor_Handler();
-        $is_elementor     = $elementor->is_elementor_post($post_id);
+        $source_language = $this->wpml_integration->get_post_language($post_id);
+        $elementor       = new WIT_Elementor_Handler();
+        $is_elementor    = $elementor->is_elementor_post($post_id);
 
         try {
             // Translate title
@@ -107,11 +107,19 @@ class WIT_Translation_Manager {
                 // Update existing translation
                 $success = $this->wpml_integration->update_translated_post($existing_translation_id, $translated_data);
 
+                if (is_wp_error($success)) {
+                    throw new Exception($success->get_error_message());
+                }
+
                 if ($success) {
                     // Translate Elementor data if applicable
                     if ($is_elementor) {
                         $el_result  = $elementor->translate($post_id, $existing_translation_id, $target_language, $source_language);
                         $debug_info = array_merge($debug_info, $el_result['debug']);
+
+                        if (!empty($el_result['error'])) {
+                            throw new Exception($el_result['error']);
+                        }
                     }
 
                     // Translate meta fields if enabled
@@ -142,6 +150,10 @@ class WIT_Translation_Manager {
                 if ($is_elementor) {
                     $el_result  = $elementor->translate($post_id, $new_post_id, $target_language, $source_language);
                     $debug_info = array_merge($debug_info, $el_result['debug']);
+
+                    if (!empty($el_result['error'])) {
+                        throw new Exception($el_result['error']);
+                    }
                 }
 
                 // Translate meta fields if enabled
@@ -179,25 +191,45 @@ class WIT_Translation_Manager {
      * @param string $source_language
      */
     private function translate_meta_fields($source_post_id, $target_post_id, $target_language, $source_language) {
-        $meta_fields = array_map('trim', explode(',', $this->settings['meta_fields_list']));
-        $translator = new WIT_Translator_Engine();
+        $meta_fields = array_filter(array_map('trim', explode(',', $this->settings['meta_fields_list'])));
+
+        if (empty($meta_fields)) {
+            return;
+        }
+
+        // Collect first, then translate in one batched call. The previous
+        // implementation issued a separate API request per meta field.
+        $values = array();
 
         foreach ($meta_fields as $meta_key) {
-            if (empty($meta_key)) {
+            // Elementor's own meta is handled by WIT_Elementor_Handler; letting
+            // it through here would send serialized page data to the API.
+            if (strpos($meta_key, '_elementor') === 0) {
                 continue;
             }
 
-            $meta_value = get_post_meta($source_post_id, $meta_key, true);
+            $value = get_post_meta($source_post_id, $meta_key, true);
 
-            if (empty($meta_value) || !is_string($meta_value)) {
+            if (!is_string($value) || trim($value) === '') {
                 continue;
             }
 
-            // Translate meta value
-            $result = $translator->translate($meta_value, $target_language, $source_language);
+            $values[$meta_key] = $value;
+        }
 
-            if (!$result['error'] && !empty($result['translation'])) {
-                update_post_meta($target_post_id, $meta_key, $result['translation']);
+        if (empty($values)) {
+            return;
+        }
+
+        $keys         = array_keys($values);
+        $translator   = new WIT_Translator_Engine();
+        $translations = $translator->translate_batch(array_values($values), $target_language, $source_language);
+
+        foreach ($keys as $index => $meta_key) {
+            if (isset($translations[$index])
+                && empty($translations[$index]['error'])
+                && $translations[$index]['translation'] !== '') {
+                update_post_meta($target_post_id, $meta_key, wp_slash($translations[$index]['translation']));
             }
         }
     }

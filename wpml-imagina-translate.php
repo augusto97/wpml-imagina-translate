@@ -3,14 +3,14 @@
  * Plugin Name: WPML Imagina Translate
  * Plugin URI: https://github.com/augusto97/wpml-imagina-translate
  * Description: Traduce automáticamente contenido de WordPress usando tu propia API key de IA (OpenAI, Claude, Gemini). Integración perfecta con WPML.
- * Version: 1.0.0
+ * Version: 1.1.0
  * Author: Imagina
  * Author URI: https://github.com/augusto97
  * License: GPL v2 or later
  * License URI: https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain: wpml-imagina-translate
  * Domain Path: /languages
- * Requires at least: 5.8
+ * Requires at least: 6.0
  * Requires PHP: 7.4
  * Requires Plugins: sitepress-multilingual-cms
  */
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('WIT_VERSION', '1.0.0');
+define('WIT_VERSION', '1.1.0');
 define('WIT_PLUGIN_FILE', __FILE__);
 define('WIT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('WIT_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -89,6 +89,8 @@ class WPML_Imagina_Translate {
     private function includes() {
         // Core classes
         require_once WIT_PLUGIN_DIR . 'includes/class-settings.php';
+        require_once WIT_PLUGIN_DIR . 'includes/class-html-translator.php';
+        require_once WIT_PLUGIN_DIR . 'includes/class-field-rules.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-translator-engine.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-content-parser.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-elementor-handler.php';
@@ -167,7 +169,9 @@ class WPML_Imagina_Translate {
             'enable_translation_memory' => false,
         );
 
-        add_option('wit_settings', $default_settings);
+        // autoload = false: the option stores API keys and has no business
+        // being loaded on every front-end request.
+        add_option('wit_settings', $default_settings, '', false);
 
         // Create translation logs table
         global $wpdb;

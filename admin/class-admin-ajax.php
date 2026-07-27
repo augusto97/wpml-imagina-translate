@@ -59,22 +59,27 @@ class WIT_Admin_Ajax {
 
         $this->verify_nonce();
 
-        $post_id         = isset($_POST['post_id'])         ? intval($_POST['post_id'])                      : 0;
-        $target_language = isset($_POST['target_language']) ? sanitize_text_field($_POST['target_language']) : '';
+        $request = $this->read_request();
 
-        if (!$post_id || !$target_language) {
-            wp_send_json_error(array(
-                'message' => __('Datos inválidos', 'wpml-imagina-translate')
-            ));
+        if (is_wp_error($request)) {
+            wp_send_json_error(array('message' => $request->get_error_message()));
         }
 
-        if (!current_user_can('edit_post', $post_id)) {
-            wp_send_json_error(array(
-                'message' => __('No tienes permisos para editar este post', 'wpml-imagina-translate')
-            ));
-        }
+        list($post_id, $target_language) = $request;
 
         $key = $this->job_key($post_id, $target_language);
+
+        // Guard against a second run being started for the same post and
+        // language while the first is still working — a double click, or the
+        // poller racing the original request.
+        $existing = get_transient($key);
+        if (is_array($existing)
+            && isset($existing['status'])
+            && $existing['status'] === 'processing'
+            && isset($existing['started_at'])
+            && (time() - (int) $existing['started_at']) < 15 * MINUTE_IN_SECONDS) {
+            wp_send_json_success($existing);
+        }
 
         // Signal that the job has started — the poller sees this immediately.
         set_transient($key, array(
@@ -133,20 +138,52 @@ class WIT_Admin_Ajax {
     public function ajax_check_translation_status() {
         $this->verify_nonce();
 
-        $post_id         = isset($_POST['post_id'])         ? intval($_POST['post_id'])                      : 0;
-        $target_language = isset($_POST['target_language']) ? sanitize_text_field($_POST['target_language']) : '';
+        $request = $this->read_request();
 
-        if (!$post_id || !$target_language) {
-            wp_send_json_error(array('message' => 'Datos inválidos'));
+        if (is_wp_error($request)) {
+            wp_send_json_error(array('message' => $request->get_error_message()));
         }
 
-        if (!current_user_can('edit_post', $post_id)) {
-            wp_send_json_error(array('message' => 'Sin permisos'));
-        }
+        list($post_id, $target_language) = $request;
 
         $job = get_transient($this->job_key($post_id, $target_language));
 
         wp_send_json_success($job !== false ? $job : array('status' => 'not_found'));
+    }
+
+    /**
+     * Read, validate and authorise the post/language pair from the request.
+     *
+     * @return array{0:int,1:string}|WP_Error
+     */
+    private function read_request() {
+        $post_id = isset($_POST['post_id']) ? absint(wp_unslash($_POST['post_id'])) : 0;
+
+        // wp_unslash() first: WordPress adds slashes to every superglobal, so
+        // sanitising without unslashing corrupts values containing quotes.
+        $target_language = isset($_POST['target_language'])
+            ? sanitize_text_field(wp_unslash($_POST['target_language']))
+            : '';
+
+        if (!$post_id || $target_language === '') {
+            return new WP_Error('wit_invalid', __('Datos inválidos', 'wpml-imagina-translate'));
+        }
+
+        if (!get_post($post_id)) {
+            return new WP_Error('wit_not_found', __('Post no encontrado', 'wpml-imagina-translate'));
+        }
+
+        if (!current_user_can('edit_post', $post_id)) {
+            return new WP_Error('wit_forbidden', __('No tienes permisos para editar este post', 'wpml-imagina-translate'));
+        }
+
+        // Reject language codes that WPML does not know about, so the plugin
+        // cannot be driven into writing junk into WPML's translation tables.
+        if (!WIT_WPML_Integration::instance()->is_active_language($target_language)) {
+            return new WP_Error('wit_language', __('El idioma destino no está activo en WPML', 'wpml-imagina-translate'));
+        }
+
+        return array($post_id, $target_language);
     }
 
     /**
@@ -159,11 +196,27 @@ class WIT_Admin_Ajax {
             wp_send_json_error(array('message' => __('No tienes permisos', 'wpml-imagina-translate')));
         }
 
-        $provider = isset($_POST['provider']) ? sanitize_text_field($_POST['provider']) : '';
-        $api_key  = isset($_POST['api_key'])  ? sanitize_text_field($_POST['api_key'])  : '';
+        $provider = isset($_POST['provider']) ? sanitize_key(wp_unslash($_POST['provider'])) : '';
 
-        if (empty($provider) || empty($api_key)) {
-            wp_send_json_error(array('message' => __('Proveedor y API key requeridos', 'wpml-imagina-translate')));
+        if (!in_array($provider, array('openai', 'claude', 'gemini'), true)) {
+            wp_send_json_error(array('message' => __('Proveedor no reconocido', 'wpml-imagina-translate')));
+        }
+
+        // Only whitespace and control characters are stripped: sanitize_text_field()
+        // would mangle otherwise valid keys.
+        $api_key = isset($_POST['api_key'])
+            ? trim(preg_replace('/[\x00-\x1F\x7F\s]/u', '', wp_unslash($_POST['api_key'])))
+            : '';
+
+        // The settings form deliberately never renders the stored key, so an
+        // empty field means "use the one already saved".
+        if ($api_key === '') {
+            $settings = WIT_Settings::instance()->get_settings();
+            $api_key  = $settings[$provider . '_api_key'];
+        }
+
+        if ($api_key === '') {
+            wp_send_json_error(array('message' => __('API key requerida', 'wpml-imagina-translate')));
         }
 
         $result = WIT_Translator_Engine::fetch_models($provider, $api_key);

@@ -80,39 +80,122 @@ class WIT_Settings {
         register_setting(
             'wit_settings_group',
             $this->option_name,
-            array($this, 'sanitize_settings')
+            array(
+                'sanitize_callback' => array($this, 'sanitize_settings'),
+                // The option holds API keys. Keeping it out of the autoloaded
+                // set means it is not read into memory on every front-end
+                // request, including requests that never translate anything.
+                'autoload'          => false,
+                'show_in_rest'      => false,
+            )
         );
     }
 
     /**
-     * Sanitize settings
+     * Sanitize settings before they are stored.
+     *
+     * @param array $input
+     * @return array
      */
     public function sanitize_settings($input) {
+        if (!current_user_can('manage_options')) {
+            return $this->get_settings();
+        }
+
+        $current   = $this->get_settings();
         $sanitized = array();
 
-        // AI Provider
-        $sanitized['ai_provider'] = isset($input['ai_provider']) ? sanitize_text_field($input['ai_provider']) : 'openai';
+        $provider = isset($input['ai_provider']) ? sanitize_key($input['ai_provider']) : 'openai';
+        $sanitized['ai_provider'] = in_array($provider, array('openai', 'claude', 'gemini'), true) ? $provider : 'openai';
 
-        // OpenAI settings
-        $sanitized['openai_api_key'] = isset($input['openai_api_key']) ? sanitize_text_field($input['openai_api_key']) : '';
-        $sanitized['openai_model'] = isset($input['openai_model']) ? sanitize_text_field($input['openai_model']) : 'gpt-4o-mini';
+        foreach (array('openai', 'claude', 'gemini') as $name) {
+            $sanitized[$name . '_api_key'] = $this->sanitize_api_key(
+                isset($input[$name . '_api_key']) ? $input[$name . '_api_key'] : '',
+                $current[$name . '_api_key'],
+                !empty($input['clear_' . $name . '_api_key'])
+            );
 
-        // Claude settings
-        $sanitized['claude_api_key'] = isset($input['claude_api_key']) ? sanitize_text_field($input['claude_api_key']) : '';
-        $sanitized['claude_model'] = isset($input['claude_model']) ? sanitize_text_field($input['claude_model']) : 'claude-haiku-4-5-20251001';
+            $sanitized[$name . '_model'] = isset($input[$name . '_model'])
+                ? sanitize_text_field($input[$name . '_model'])
+                : $current[$name . '_model'];
+        }
 
-        // Gemini settings
-        $sanitized['gemini_api_key'] = isset($input['gemini_api_key']) ? sanitize_text_field($input['gemini_api_key']) : '';
-        $sanitized['gemini_model'] = isset($input['gemini_model']) ? sanitize_text_field($input['gemini_model']) : 'gemini-2.5-flash';
+        $sanitized['translation_prompt']        = isset($input['translation_prompt']) ? sanitize_textarea_field($input['translation_prompt']) : '';
+        $sanitized['translate_meta_fields']     = !empty($input['translate_meta_fields']);
+        $sanitized['enable_translation_memory'] = !empty($input['enable_translation_memory']);
+        $sanitized['batch_size']                = isset($input['batch_size']) ? min(50, max(1, absint($input['batch_size']))) : 5;
 
-        // Translation settings
-        $sanitized['translation_prompt'] = isset($input['translation_prompt']) ? sanitize_textarea_field($input['translation_prompt']) : '';
-        $sanitized['translate_meta_fields'] = isset($input['translate_meta_fields']) ? (bool)$input['translate_meta_fields'] : false;
-        $sanitized['meta_fields_list'] = isset($input['meta_fields_list']) ? sanitize_textarea_field($input['meta_fields_list']) : '';
-        $sanitized['batch_size'] = isset($input['batch_size']) ? min(50, max(1, absint($input['batch_size']))) : 5;
-        $sanitized['enable_translation_memory'] = isset($input['enable_translation_memory']) ? (bool)$input['enable_translation_memory'] : false;
+        // Meta keys only: strip anything that is not a valid meta key so the
+        // list cannot be used to read arbitrary data.
+        $meta_fields = isset($input['meta_fields_list']) ? (string) $input['meta_fields_list'] : '';
+        $meta_fields = array_filter(array_map(
+            function ($key) {
+                return preg_replace('/[^A-Za-z0-9_\-]/', '', trim($key));
+            },
+            explode(',', $meta_fields)
+        ));
+        $sanitized['meta_fields_list'] = implode(',', $meta_fields);
 
         return $sanitized;
+    }
+
+    /**
+     * Resolve the value to store for an API key field.
+     *
+     * The settings form never renders the stored key, so an empty submission
+     * means "leave it as it is" rather than "delete it". Clearing a key is an
+     * explicit action via its checkbox.
+     *
+     * @param string $submitted
+     * @param string $current
+     * @param bool   $clear
+     * @return string
+     */
+    private function sanitize_api_key($submitted, $current, $clear) {
+        if ($clear) {
+            return '';
+        }
+
+        // API keys can contain characters that sanitize_text_field would strip,
+        // so only whitespace and control characters are removed.
+        $submitted = trim(preg_replace('/[\x00-\x1F\x7F\s]/u', '', (string) $submitted));
+
+        return $submitted !== '' ? $submitted : $current;
+    }
+
+    /**
+     * Render an API key field that never exposes the stored secret.
+     *
+     * @param string $name  Provider slug.
+     * @param string $value Stored key.
+     */
+    private function render_api_key_field($name, $value) {
+        $has_key = ($value !== '');
+        $field   = $name . '_api_key';
+        ?>
+        <input type="password"
+               name="<?php echo esc_attr($this->option_name); ?>[<?php echo esc_attr($field); ?>]"
+               id="<?php echo esc_attr($field); ?>"
+               value=""
+               autocomplete="new-password"
+               spellcheck="false"
+               placeholder="<?php echo esc_attr(
+                   $has_key
+                       ? __('Guardada — deja el campo vacío para conservarla', 'wpml-imagina-translate')
+                       : __('Introduce tu API key', 'wpml-imagina-translate')
+               ); ?>"
+               class="regular-text">
+        <?php if ($has_key) : ?>
+            <p>
+                <label>
+                    <input type="checkbox"
+                           name="<?php echo esc_attr($this->option_name); ?>[clear_<?php echo esc_attr($field); ?>]"
+                           value="1">
+                    <?php esc_html_e('Borrar la API key guardada', 'wpml-imagina-translate'); ?>
+                </label>
+            </p>
+        <?php endif; ?>
+        <?php
     }
 
     /**
@@ -139,7 +222,7 @@ class WIT_Settings {
                             <label for="ai_provider"><?php _e('Proveedor de IA', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <select name="<?php echo $this->option_name; ?>[ai_provider]" id="ai_provider" class="regular-text">
+                            <select name="<?php echo esc_attr($this->option_name); ?>[ai_provider]" id="ai_provider" class="regular-text">
                                 <option value="openai" <?php selected($settings['ai_provider'], 'openai'); ?>>OpenAI (GPT)</option>
                                 <option value="claude" <?php selected($settings['ai_provider'], 'claude'); ?>>Anthropic Claude</option>
                                 <option value="gemini" <?php selected($settings['ai_provider'], 'gemini'); ?>>Google Gemini</option>
@@ -156,11 +239,7 @@ class WIT_Settings {
                             <label for="openai_api_key"><?php _e('OpenAI API Key', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <input type="password"
-                                   name="<?php echo $this->option_name; ?>[openai_api_key]"
-                                   id="openai_api_key"
-                                   value="<?php echo esc_attr($settings['openai_api_key']); ?>"
-                                   class="regular-text">
+                            <?php $this->render_api_key_field('openai', $settings['openai_api_key']); ?>
                             <p class="description">
                                 <?php _e('Obtén tu API key en', 'wpml-imagina-translate'); ?>
                                 <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com/api-keys</a>
@@ -172,7 +251,7 @@ class WIT_Settings {
                             <label for="openai_model"><?php _e('Modelo OpenAI', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <select name="<?php echo $this->option_name; ?>[openai_model]"
+                            <select name="<?php echo esc_attr($this->option_name); ?>[openai_model]"
                                     id="openai_model"
                                     class="regular-text wit-model-select"
                                     data-provider="openai"
@@ -201,11 +280,7 @@ class WIT_Settings {
                             <label for="claude_api_key"><?php _e('Claude API Key', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <input type="password"
-                                   name="<?php echo $this->option_name; ?>[claude_api_key]"
-                                   id="claude_api_key"
-                                   value="<?php echo esc_attr($settings['claude_api_key']); ?>"
-                                   class="regular-text">
+                            <?php $this->render_api_key_field('claude', $settings['claude_api_key']); ?>
                             <p class="description">
                                 <?php _e('Obtén tu API key en', 'wpml-imagina-translate'); ?>
                                 <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a>
@@ -217,7 +292,7 @@ class WIT_Settings {
                             <label for="claude_model"><?php _e('Modelo Claude', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <select name="<?php echo $this->option_name; ?>[claude_model]"
+                            <select name="<?php echo esc_attr($this->option_name); ?>[claude_model]"
                                     id="claude_model"
                                     class="regular-text wit-model-select"
                                     data-provider="claude"
@@ -246,11 +321,7 @@ class WIT_Settings {
                             <label for="gemini_api_key"><?php _e('Gemini API Key', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <input type="password"
-                                   name="<?php echo $this->option_name; ?>[gemini_api_key]"
-                                   id="gemini_api_key"
-                                   value="<?php echo esc_attr($settings['gemini_api_key']); ?>"
-                                   class="regular-text">
+                            <?php $this->render_api_key_field('gemini', $settings['gemini_api_key']); ?>
                             <p class="description">
                                 <?php _e('Obtén tu API key en', 'wpml-imagina-translate'); ?>
                                 <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com/app/apikey</a>
@@ -262,7 +333,7 @@ class WIT_Settings {
                             <label for="gemini_model"><?php _e('Modelo Gemini', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <select name="<?php echo $this->option_name; ?>[gemini_model]"
+                            <select name="<?php echo esc_attr($this->option_name); ?>[gemini_model]"
                                     id="gemini_model"
                                     class="regular-text wit-model-select"
                                     data-provider="gemini"
@@ -291,7 +362,7 @@ class WIT_Settings {
                             <label for="translation_prompt"><?php _e('Prompt de Traducción', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <textarea name="<?php echo $this->option_name; ?>[translation_prompt]"
+                            <textarea name="<?php echo esc_attr($this->option_name); ?>[translation_prompt]"
                                       id="translation_prompt"
                                       rows="5"
                                       class="large-text"><?php echo esc_textarea($settings['translation_prompt']); ?></textarea>
@@ -309,7 +380,7 @@ class WIT_Settings {
                         <td>
                             <label>
                                 <input type="checkbox"
-                                       name="<?php echo $this->option_name; ?>[translate_meta_fields]"
+                                       name="<?php echo esc_attr($this->option_name); ?>[translate_meta_fields]"
                                        id="translate_meta_fields"
                                        value="1"
                                        <?php checked($settings['translate_meta_fields'], true); ?>>
@@ -322,7 +393,7 @@ class WIT_Settings {
                             <label for="meta_fields_list"><?php _e('Lista de Meta Fields', 'wpml-imagina-translate'); ?></label>
                         </th>
                         <td>
-                            <textarea name="<?php echo $this->option_name; ?>[meta_fields_list]"
+                            <textarea name="<?php echo esc_attr($this->option_name); ?>[meta_fields_list]"
                                       id="meta_fields_list"
                                       rows="4"
                                       class="large-text"><?php echo esc_textarea($settings['meta_fields_list']); ?></textarea>
@@ -337,7 +408,7 @@ class WIT_Settings {
                         </th>
                         <td>
                             <input type="number"
-                                   name="<?php echo $this->option_name; ?>[batch_size]"
+                                   name="<?php echo esc_attr($this->option_name); ?>[batch_size]"
                                    id="batch_size"
                                    value="<?php echo esc_attr($settings['batch_size']); ?>"
                                    min="1"
@@ -357,7 +428,7 @@ class WIT_Settings {
                         <td>
                             <label>
                                 <input type="checkbox"
-                                       name="<?php echo $this->option_name; ?>[enable_translation_memory]"
+                                       name="<?php echo esc_attr($this->option_name); ?>[enable_translation_memory]"
                                        id="enable_translation_memory"
                                        value="1"
                                        <?php checked($settings['enable_translation_memory'], true); ?>>

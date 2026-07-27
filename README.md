@@ -23,18 +23,34 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 - Copia taxonomías, featured images, y metadatos
 - Actualiza traducciones existentes
 
-### Seguridad
-- Preserva shortcodes, HTML, y código
-- No traduce atributos HTML ni clases CSS
-- Blacklist configurable de contenido a no traducir
+### Integridad del contenido
+- El HTML se modifica por posiciones de token, nunca re-serializando: todo byte
+  fuera de un nodo de texto se conserva idéntico
+- No traduce clases CSS, IDs, colores, URLs, tags HTML ni valores técnicos
+  (`align`, `header_size`, `_animation`, `is_external`…)
+- Los atributos visibles (`alt`, `title`, `placeholder`, `aria-label`) se
+  traducen en el HTML **y** en los atributos del bloque a la vez, que es lo que
+  exige la validación de Gutenberg
+- Compatible con Elementor 3.x (widgets clásicos) y 4.x (widgets *atomic* con
+  envoltorios `$$type`)
 - Posts creados como borrador para revisión
+
+### Seguridad
+- Las API keys nunca se imprimen en el HTML de la página de ajustes
+- La opción con las keys no se autocarga en cada petición del front-end
+- La key de Gemini viaja en cabecera, no en la URL (no queda en logs)
+- El texto devuelto por la IA se escapa antes de insertarse: no puede inyectar
+  markup ni scripts
+- Verificación de nonce y de capacidad `edit_post` por cada post
+- El idioma destino se valida contra los idiomas activos de WPML
 
 ## 📦 Instalación
 
 ### Requisitos
-- WordPress 5.8 o superior
-- PHP 7.4 o superior
-- WPML Multilingual CMS (activo)
+- WordPress 6.0 o superior (probado hasta 7.1)
+- PHP 7.4 o superior (probado hasta 8.4)
+- WPML Multilingual CMS 4.7 o superior (probado con 4.9.x y 5.0 beta)
+- Elementor 3.x o 4.x (opcional)
 - API key de OpenAI, Claude, o Gemini
 
 ### Pasos
@@ -303,3 +319,47 @@ https://github.com/augusto97/wpml-imagina-translate/issues
 ---
 
 **¿Te gusta este plugin? Dale una ⭐ en GitHub!**
+
+---
+
+## ⚠️ Limitaciones conocidas
+
+Cosas que el plugin **no** hace todavía, para que no te pillen por sorpresa:
+
+- **Patrones sincronizados (`wp:block`)**: el contenido vive en otro post
+  (`wp_block`). El post anfitrión se traduce, pero el patrón en sí hay que
+  traducirlo por separado y el `ref` no se remapea al patrón traducido.
+- **Block Bindings** (`metadata.bindings`, WP 6.5+): cuando el texto de un
+  bloque viene de un campo personalizado, el HTML almacenado es solo un
+  *fallback* que se reemplaza al renderizar. El plugin deja ese subárbol intacto
+  (correcto), pero no traduce el valor de origen.
+- **Plantillas FSE**: solo son traducibles las que están en base de datos
+  (`source === 'custom'`). Las que son ficheros del tema no se tocan.
+- **Menús de navegación** (`wp_navigation`): mismo caso que los patrones.
+- **Campos ACF y meta personalizados**: solo se traducen los que declares
+  explícitamente en la lista de meta fields.
+- **Elementor Global Classes** (v4): son por Kit y no viven en `_elementor_data`;
+  si WPML asigna un Kit distinto por idioma habrá que revisarlas a mano.
+
+## 🔧 Notas para desarrolladores
+
+Filtros disponibles:
+
+```php
+// Estado con el que se crean las traducciones nuevas (por defecto 'draft')
+add_filter( 'wit_new_translation_status', fn() => 'publish' );
+
+// Registrar en el log cada cadena enviada y recibida (por defecto solo con WP_DEBUG)
+add_filter( 'wit_verbose_debug', '__return_true' );
+```
+
+Arquitectura:
+
+| Clase | Responsabilidad |
+|---|---|
+| `WIT_HTML_Translator` | Tokeniza HTML y sustituye texto por posición, sin re-serializar |
+| `WIT_Field_Rules` | Decide qué claves de `attrs`/`settings` contienen texto traducible |
+| `WIT_Translator_Engine` | Llamadas a la API, protocolo de lote con marcadores, reintentos |
+| `WIT_Content_Parser` | Gutenberg (`parse_blocks`/`serialize_blocks`) y editor clásico |
+| `WIT_Elementor_Handler` | `_elementor_data`, incluidos los widgets *atomic* de la v4 |
+| `WIT_WPML_Integration` | Creación y vinculación de traducciones vía hooks de WPML |

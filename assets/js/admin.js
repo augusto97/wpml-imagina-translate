@@ -379,12 +379,16 @@
     const WitModels = {
 
         init: function() {
-            // Auto-load models for every provider that already has a key saved
+            // Auto-load models for every provider that already has a key.
+            // The key field is intentionally rendered empty, so a saved key is
+            // detected from its placeholder state instead of its value; the
+            // server falls back to the stored key when none is submitted.
             $('.wit-model-select').each(function() {
                 const $select  = $(this);
                 const keyField = $select.data('key-field');
-                const apiKey   = $('#' + keyField).val().trim();
-                if (apiKey) {
+                const $key     = $('#' + keyField);
+                const hasKey   = $key.val().trim() !== '' || $key.siblings('p').find('input[type=checkbox]').length > 0;
+                if (hasKey) {
                     WitModels.load($select);
                 }
             });
@@ -403,9 +407,13 @@
             const savedVal = $select.data('saved');
             const $status  = $select.siblings('.wit-models-status');
             const $btn     = $select.siblings('.wit-refresh-models');
-            const apiKey   = $('#' + keyField).val().trim();
+            const $key     = $('#' + keyField);
+            const apiKey   = $key.val().trim();
+            // An empty field is fine when a key is already saved: the server
+            // uses the stored one. The checkbox only exists when a key exists.
+            const hasSaved = $key.siblings('p').find('input[type=checkbox]').length > 0;
 
-            if (!apiKey) {
+            if (!apiKey && !hasSaved) {
                 $status.css('color', '#cc0000').text('Introduce la API key primero y guarda los ajustes.');
                 return;
             }

@@ -95,23 +95,41 @@ class WIT_Translation_Dashboard {
      * Render dashboard page
      */
     public function render_dashboard() {
-        $wpml_integration = WIT_WPML_Integration::instance();
-        $languages = $wpml_integration->get_active_languages();
-        $default_language = $wpml_integration->get_default_language();
-
-        // Get selected target language
-        $target_language = isset($_GET['target_lang']) ? sanitize_text_field($_GET['target_lang']) : '';
-
-        // Get pending posts if language is selected
-        $pending_posts = array();
-        if ($target_language) {
-            $post_types = isset($_GET['post_types']) ? (array)$_GET['post_types'] : array('post', 'page');
-            $pending_posts = $wpml_integration->get_pending_translations($target_language, $post_types);
+        if (!current_user_can('edit_posts')) {
+            wp_die(esc_html__('No tienes permisos para acceder a esta página.', 'wpml-imagina-translate'));
         }
 
-        // Get statistics
+        $wpml_integration = WIT_WPML_Integration::instance();
+        $languages        = $wpml_integration->get_active_languages();
+        $default_language = $wpml_integration->get_default_language();
+
+        // This is a read-only listing driven by a GET form, so a nonce is not
+        // required; the values are validated instead of trusted.
+        $target_language = isset($_GET['target_lang'])
+            ? sanitize_text_field(wp_unslash($_GET['target_lang']))
+            : '';
+
+        if ($target_language !== '' && !$wpml_integration->is_active_language($target_language)) {
+            $target_language = '';
+        }
+
+        $selected_post_types = isset($_GET['post_types'])
+            ? array_values(array_filter(
+                array_map('sanitize_key', (array) wp_unslash($_GET['post_types'])),
+                'post_type_exists'
+            ))
+            : array('post', 'page');
+
+        if (empty($selected_post_types)) {
+            $selected_post_types = array('post', 'page');
+        }
+
+        $pending_posts = $target_language !== ''
+            ? $wpml_integration->get_pending_translations($target_language, $selected_post_types)
+            : array();
+
         $translation_manager = new WIT_Translation_Manager();
-        $stats = $translation_manager->get_statistics();
+        $stats               = $translation_manager->get_statistics();
 
         include WIT_PLUGIN_DIR . 'admin/views/dashboard.php';
     }
@@ -120,8 +138,12 @@ class WIT_Translation_Dashboard {
      * Render logs page
      */
     public function render_logs() {
+        if (!current_user_can('edit_posts')) {
+            wp_die(esc_html__('No tienes permisos para acceder a esta página.', 'wpml-imagina-translate'));
+        }
+
         $translation_manager = new WIT_Translation_Manager();
-        $logs = $translation_manager->get_translation_logs(100);
+        $logs                = $translation_manager->get_translation_logs(100);
 
         include WIT_PLUGIN_DIR . 'admin/views/logs.php';
     }

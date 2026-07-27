@@ -62,7 +62,8 @@ if (!defined('ABSPATH')) {
                     </th>
                     <td>
                         <?php
-                        $selected_post_types = isset($_GET['post_types']) ? (array)$_GET['post_types'] : array('post', 'page');
+                        // $selected_post_types is sanitised and validated by
+                        // WIT_Translation_Dashboard::render_dashboard().
                         $post_types = get_post_types(array('public' => true), 'objects');
                         foreach ($post_types as $post_type):
                             if (in_array($post_type->name, array('attachment', 'revision', 'nav_menu_item'))) {
