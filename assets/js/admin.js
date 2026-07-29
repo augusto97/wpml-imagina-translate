@@ -8,6 +8,32 @@
     const WitAdmin = {
         init: function() {
             this.bindEvents();
+            this.initProviderToggle();
+        },
+
+        /**
+         * Show only the selected provider's fields.
+         *
+         * The settings page used to render all three API key fields at once,
+         * which left no indication of which one the plugin would actually use.
+         */
+        initProviderToggle: function() {
+            const $select = $('#ai_provider');
+
+            if (!$select.length) {
+                return; // Not the settings page.
+            }
+
+            const sync = function() {
+                const provider = $select.val();
+
+                $('.wit-provider-section').each(function() {
+                    $(this).toggle($(this).data('provider') === provider);
+                });
+            };
+
+            $select.on('change', sync);
+            sync();
         },
 
         bindEvents: function() {

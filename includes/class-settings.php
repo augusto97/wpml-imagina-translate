@@ -12,6 +12,9 @@ class WIT_Settings {
     private static $instance = null;
     private $option_name = 'wit_settings';
 
+    /** Screen id of the settings page, as returned by add_submenu_page(). */
+    private $page_hook = '';
+
     public static function instance() {
         if (is_null(self::$instance)) {
             self::$instance = new self();
@@ -20,16 +23,122 @@ class WIT_Settings {
     }
 
     private function __construct() {
-        add_action('admin_menu', array($this, 'add_settings_page'));
+        // Priority 20: the parent menu is registered by the dashboard at the
+        // default priority, and a submenu cannot be attached before it exists.
+        add_action('admin_menu', array($this, 'add_settings_page'), 20);
         add_action('admin_init', array($this, 'register_settings'));
+        add_action('admin_init', array($this, 'redirect_legacy_settings_url'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_assets'));
+        add_action('admin_notices', array($this, 'missing_api_key_notice'));
+
+        // "Ajustes" straight from the plugins list, where people look first.
+        add_filter('plugin_action_links_' . WIT_PLUGIN_BASENAME, array($this, 'add_action_links'));
+    }
+
+    /**
+     * URL of the settings page.
+     *
+     * @return string
+     */
+    public function settings_url() {
+        return admin_url('admin.php?page=wpml-imagina-translate-settings');
+    }
+
+    /**
+     * Whether the selected provider has a key stored.
+     *
+     * @return bool
+     */
+    public function has_api_key() {
+        $settings = $this->get_settings();
+        $provider = $settings['ai_provider'];
+
+        return !empty($settings[$provider . '_api_key']);
+    }
+
+    /**
+     * Add a direct "Ajustes" link to the plugin's row on the plugins screen.
+     *
+     * @param string[] $links
+     * @return string[]
+     */
+    public function add_action_links($links) {
+        array_unshift($links, sprintf(
+            '<a href="%s">%s</a>',
+            esc_url($this->settings_url()),
+            esc_html__('Ajustes', 'wpml-imagina-translate')
+        ));
+
+        return $links;
+    }
+
+    /**
+     * Point out that nothing can be translated until a key is stored.
+     *
+     * Without this the first failure is a generic "API key no configurada"
+     * error on an individual post, which does not say where to fix it.
+     */
+    public function missing_api_key_notice() {
+        if (!current_user_can('manage_options') || $this->has_api_key()) {
+            return;
+        }
+
+        $screen = get_current_screen();
+
+        if (!$screen || $screen->id === $this->page_hook) {
+            return; // Already on the page that fixes it.
+        }
+
+        $relevant = ($screen->id === 'plugins' || strpos($screen->id, 'wpml-ia-translate') !== false);
+
+        if (!$relevant) {
+            return;
+        }
+
+        ?>
+        <div class="notice notice-warning">
+            <p>
+                <strong><?php esc_html_e('WPML Imagina Translate', 'wpml-imagina-translate'); ?>:</strong>
+                <?php esc_html_e('todavía no has configurado una API key, así que no se puede traducir nada.', 'wpml-imagina-translate'); ?>
+                <a href="<?php echo esc_url($this->settings_url()); ?>">
+                    <?php esc_html_e('Configurar ahora', 'wpml-imagina-translate'); ?>
+                </a>
+            </p>
+        </div>
+        <?php
+    }
+
+    /**
+     * Send the pre-1.2 settings URL to the current one.
+     *
+     * The page used to live under Settings; bookmarks and older documentation
+     * still point at options-general.php.
+     */
+    public function redirect_legacy_settings_url() {
+        global $pagenow;
+
+        if ($pagenow !== 'options-general.php') {
+            return;
+        }
+
+        $page = isset($_GET['page']) ? sanitize_key(wp_unslash($_GET['page'])) : '';
+
+        if ($page !== 'wpml-imagina-translate-settings') {
+            return;
+        }
+
+        wp_safe_redirect($this->settings_url());
+        exit;
     }
 
     /**
      * Enqueue JS/CSS on the settings page
      */
     public function enqueue_assets($hook) {
-        if ($hook !== 'settings_page_wpml-imagina-translate-settings') {
+        // Compared against the hook add_submenu_page() actually returned: the
+        // screen id is derived from the parent menu, so hardcoding it breaks
+        // silently whenever the page moves.
+        if (!$this->page_hook || $hook !== $this->page_hook) {
             return;
         }
 
@@ -64,9 +173,13 @@ class WIT_Settings {
      * Add settings page to WordPress admin
      */
     public function add_settings_page() {
-        add_options_page(
-            __('WPML Imagina Translate Settings', 'wpml-imagina-translate'),
-            __('WPML IA Translate', 'wpml-imagina-translate'),
+        // Under the plugin's own menu rather than Settings: a plugin with a
+        // top-level menu that hides its configuration elsewhere is a plugin
+        // whose API key nobody can find.
+        $this->page_hook = add_submenu_page(
+            'wpml-ia-translate',
+            __('Ajustes de WPML IA Translate', 'wpml-imagina-translate'),
+            __('Ajustes', 'wpml-imagina-translate'),
             'manage_options',
             'wpml-imagina-translate-settings',
             array($this, 'render_settings_page')
@@ -234,7 +347,8 @@ class WIT_Settings {
                     </tr>
                 </table>
 
-                <h2 class="title"><?php _e('OpenAI Configuration', 'wpml-imagina-translate'); ?></h2>
+                <div class="wit-provider-section" data-provider="openai"<?php echo $settings['ai_provider'] === 'openai' ? '' : ' style="display:none;"'; ?>>
+                <h2 class="title"><?php _e('Configuración de OpenAI', 'wpml-imagina-translate'); ?></h2>
                 <table class="form-table">
                     <tr>
                         <th scope="row">
@@ -274,8 +388,10 @@ class WIT_Settings {
                         </td>
                     </tr>
                 </table>
+                </div>
 
-                <h2 class="title"><?php _e('Claude Configuration', 'wpml-imagina-translate'); ?></h2>
+                <div class="wit-provider-section" data-provider="claude"<?php echo $settings['ai_provider'] === 'claude' ? '' : ' style="display:none;"'; ?>>
+                <h2 class="title"><?php _e('Configuración de Claude', 'wpml-imagina-translate'); ?></h2>
                 <table class="form-table">
                     <tr>
                         <th scope="row">
@@ -315,8 +431,10 @@ class WIT_Settings {
                         </td>
                     </tr>
                 </table>
+                </div>
 
-                <h2 class="title"><?php _e('Gemini Configuration', 'wpml-imagina-translate'); ?></h2>
+                <div class="wit-provider-section" data-provider="gemini"<?php echo $settings['ai_provider'] === 'gemini' ? '' : ' style="display:none;"'; ?>>
+                <h2 class="title"><?php _e('Configuración de Gemini', 'wpml-imagina-translate'); ?></h2>
                 <table class="form-table">
                     <tr>
                         <th scope="row">
@@ -356,8 +474,9 @@ class WIT_Settings {
                         </td>
                     </tr>
                 </table>
+                </div>
 
-                <h2 class="title"><?php _e('Translation Settings', 'wpml-imagina-translate'); ?></h2>
+                <h2 class="title"><?php _e('Ajustes de Traducción', 'wpml-imagina-translate'); ?></h2>
                 <table class="form-table">
                     <tr>
                         <th scope="row">

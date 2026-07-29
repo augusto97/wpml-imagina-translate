@@ -67,7 +67,7 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
    - Activa "WPML Imagina Translate"
 
 3. **Configurar API key**
-   - Ve a Settings → WPML IA Translate
+   - Ve a **IA Translate → Ajustes** (o pulsa «Ajustes» en la fila del plugin)
    - Selecciona tu proveedor de IA
    - Ingresa tu API key
    - Guarda los cambios
@@ -247,7 +247,7 @@ Tabla: `wp_wit_translation_logs`
 ## 🛠️ Troubleshooting
 
 ### Error: "API key no configurada"
-**Solución:** Ve a Settings → WPML IA Translate y configura tu API key.
+**Solución:** Ve a **IA Translate → Ajustes** y configura tu API key.
 
 ### Error: "WPML no está activo"
 **Solución:** Instala y activa WPML (Multilingual CMS).
