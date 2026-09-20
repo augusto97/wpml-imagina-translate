@@ -134,6 +134,10 @@ class WIT_Translator_Engine {
 
         $result = $this->request($text, $prompt);
 
+        if (empty($result['error'])) {
+            $result['translation'] = $this->unwrap_single($result['translation'], $text);
+        }
+
         if (empty($result['error']) && $result['translation'] !== '') {
             $this->usage['api']++;
             $memory->store_many(
@@ -320,10 +324,16 @@ class WIT_Translator_Engine {
 
         // Single item: no batching protocol needed, avoids marker overhead.
         if (count($keys) === 1) {
+            $source = reset($chunk);
             $result = $this->request(
-                reset($chunk),
+                $source,
                 $this->single_prompt($target_name, $source_name) . $glossary_section
             );
+
+            if (empty($result['error'])) {
+                $result['translation'] = $this->unwrap_single($result['translation'], $source);
+            }
+
             return array($keys[0] => $result);
         }
 
@@ -368,6 +378,11 @@ class WIT_Translator_Engine {
         // partial batch failure into a slower success rather than lost content.
         foreach ($missing as $index => $text) {
             $single = $this->request($text, $this->single_prompt($target_name, $source_name) . $glossary_section);
+
+            if (empty($single['error'])) {
+                $single['translation'] = $this->unwrap_single($single['translation'], $text);
+            }
+
             $out[$index] = (empty($single['error']) && trim($single['translation']) !== '')
                 ? array('translation' => $single['translation'], 'error' => null)
                 : $this->error(
@@ -388,6 +403,15 @@ class WIT_Translator_Engine {
      * @return array 1-based position => translation.
      */
     private function parse_batch_response($response, $expected) {
+        // Chatter after the last item would otherwise be swallowed by it:
+        // nothing marks where the final translation ends. The prompt asks for
+        // a terminator line, and everything past it is discarded. A model
+        // that omits it behaves exactly as before.
+        $terminator = preg_split('/^[ \t>*_#\-]*\[\[\[\s*end\s*\]\]\]/mi', $response, 2);
+        if (is_array($terminator) && count($terminator) === 2) {
+            $response = $terminator[0];
+        }
+
         // Models occasionally wrap the marker in markdown emphasis or a list
         // bullet ("**[[[1]]]**", "- [[[1]]]"), so decoration is tolerated on
         // both sides of the marker rather than being left in the translation.
@@ -432,6 +456,7 @@ class WIT_Translator_Engine {
              . '- Preserve the internal line breaks of each item.' . "\n"
              . '- Preserve any HTML tags, shortcodes, placeholders and entities exactly as they appear.' . "\n"
              . '- Keep proper nouns, brand names and technical terms unchanged.' . "\n"
+             . '- After the last item, output a final line containing exactly [[[end]]].' . "\n"
              . '- Output nothing except the markers and their translations. No preamble, no notes.';
     }
 
@@ -442,8 +467,53 @@ class WIT_Translator_Engine {
             $this->settings['translation_prompt']
         );
 
-        return $prompt !== '' ? $prompt : 'Translate the following text to ' . $target_name
-             . '. Return ONLY the translated text, nothing else.';
+        if ($prompt === '') {
+            $prompt = 'Translate the following text to ' . $target_name
+                    . '. Return ONLY the translated text, nothing else.';
+        }
+
+        // "Return only the translation" is an instruction a model may still
+        // ignore, and for a single string there is no way to tell a preamble
+        // from the translation itself. Asking for the same marker the batch
+        // protocol uses makes the boundary machine-checkable: a chatty
+        // "Sure, here is the translation:" ends up outside the marker and is
+        // discarded instead of becoming the post title.
+        return $prompt . "\n\n"
+             . 'Output format: begin your reply with a line containing exactly [[[1]]], '
+             . 'then the translation on the following lines, then a final line '
+             . 'containing exactly [[[end]]].';
+    }
+
+    /**
+     * Extract a single translation from a raw model reply.
+     *
+     * Falls back to the trimmed reply when the marker is absent, so a model
+     * that ignores the format instruction is no worse off than before.
+     *
+     * @param string $raw
+     * @return string
+     */
+    private function unwrap_single($raw, $source = '') {
+        $parsed = $this->parse_batch_response($raw, 1);
+
+        if (isset($parsed[1]) && trim($parsed[1]) !== '') {
+            return trim($parsed[1]);
+        }
+
+        $text = trim($raw);
+
+        // A model that wraps its whole answer in quotes is common enough, and
+        // the quotes are never part of the translation when the source had
+        // none.
+        $source_is_quoted = preg_match('/^["\'\x{201C}\x{2018}]/u', trim($source));
+
+        if (!$source_is_quoted
+            && preg_match('/^(["\'\x{201C}\x{2018}])(.*)(["\'\x{201D}\x{2019}])$/us', $text, $m)
+            && strpos($m[2], "\n") === false) {
+            return trim($m[2]);
+        }
+
+        return $text;
     }
 
     // -----------------------------------------------------------------------

@@ -27,7 +27,12 @@ class WIT_Settings {
         // default priority, and a submenu cannot be attached before it exists.
         add_action('admin_menu', array($this, 'add_settings_page'), 20);
         add_action('admin_init', array($this, 'register_settings'));
-        add_action('admin_init', array($this, 'redirect_legacy_settings_url'));
+
+        // Not admin_init: wp-admin/includes/menu.php runs the access check and
+        // wp_die()s with a 403 before admin_init ever fires, so a redirect
+        // hooked there never ran. This action is fired immediately before that
+        // wp_die() and is the only point early enough to intercept it.
+        add_action('admin_page_access_denied', array($this, 'redirect_legacy_settings_url'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_assets'));
         add_action('admin_notices', array($this, 'missing_api_key_notice'));
 
@@ -109,10 +114,11 @@ class WIT_Settings {
     }
 
     /**
-     * Send the pre-1.2 settings URL to the current one.
+     * Send the pre-1.2.1 settings URL to the current one.
      *
      * The page used to live under Settings; bookmarks and older documentation
-     * still point at options-general.php.
+     * still point at options-general.php, where WordPress now answers 403
+     * because no page is registered there any more.
      */
     public function redirect_legacy_settings_url() {
         global $pagenow;

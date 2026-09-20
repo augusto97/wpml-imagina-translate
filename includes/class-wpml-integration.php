@@ -307,19 +307,24 @@ class WIT_WPML_Integration {
 
         $this->link_translation($source_post_id, $new_post_id, $target_language);
         $this->copy_taxonomies($source_post_id, $new_post_id, $target_language, $source_language);
+        $this->copy_meta($source_post_id, $new_post_id);
         $this->copy_featured_image($source_post_id, $new_post_id, $target_language);
 
         return $new_post_id;
     }
 
     /**
-     * Update an existing translation.
+     * Update an existing translation with freshly translated content.
      *
-     * @param int   $post_id
-     * @param array $data {title, content, excerpt}
-     * @return bool|WP_Error
+     * @param int   $post_id        The translation.
+     * @param array $data           {title, content, excerpt}
+     * @param int   $source_post_id When given, taxonomies and the featured
+     *                              image are re-synced from it too: the source
+     *                              is the source of truth, and the content is
+     *                              being regenerated from it anyway.
+     * @return true|WP_Error
      */
-    public function update_translated_post($post_id, $data) {
+    public function update_translated_post($post_id, $data, $source_post_id = 0) {
         $postarr = array(
             'ID'           => $post_id,
             'post_title'   => $data['title'],
@@ -332,7 +337,92 @@ class WIT_WPML_Integration {
 
         $result = $this->insert_post($postarr, true);
 
-        return is_wp_error($result) ? $result : true;
+        if (is_wp_error($result)) {
+            return $result;
+        }
+
+        if ($source_post_id) {
+            $target_language = $this->get_post_language($post_id);
+            $source_language = $this->get_post_language($source_post_id);
+
+            if ($target_language) {
+                $this->copy_taxonomies($source_post_id, $post_id, $target_language, $source_language);
+                $this->copy_featured_image($source_post_id, $post_id, $target_language);
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Copy the custom fields a translation would otherwise lose.
+     *
+     * Page template, ACF fields, Elementor page settings, layout flags: a
+     * translation created without them renders differently from its source,
+     * or not at all. Fields configured for translation are overwritten by the
+     * translation step afterwards; fields handled elsewhere and WordPress/WPML
+     * housekeeping keys are left out.
+     *
+     * Creation only. A re-translation regenerates the content, but whatever
+     * the reviewer changed in other fields of the translation stays theirs.
+     *
+     * @param int $source_post_id
+     * @param int $target_post_id
+     * @return int Keys copied.
+     */
+    private function copy_meta($source_post_id, $target_post_id) {
+        $all = get_post_meta($source_post_id);
+
+        if (!is_array($all) || empty($all)) {
+            return 0;
+        }
+
+        $skip_exact = array(
+            '_edit_lock', '_edit_last', '_wp_old_slug', '_wp_old_date',
+            '_wp_desired_post_slug', '_pingme', '_encloseme',
+            '_thumbnail_id',                    // copy_featured_image() resolves the translated media
+            '_last_translation_edit_mode',
+        );
+        // _elementor_* is WIT_Elementor_Handler's: it translates the data,
+        // copies the settings keys and clears the render caches itself.
+        $skip_prefix = array('_elementor_', '_icl_', '_wpml_', '_wp_trash_meta_', '_oembed_');
+
+        $copied = 0;
+
+        foreach ($all as $key => $values) {
+            if (in_array($key, $skip_exact, true)) {
+                continue;
+            }
+            foreach ($skip_prefix as $prefix) {
+                if (strpos($key, $prefix) === 0) {
+                    continue 2;
+                }
+            }
+
+            /**
+             * Filter whether a custom field is copied to a new translation.
+             *
+             * @param bool   $copy
+             * @param string $key
+             * @param int    $source_post_id
+             * @param int    $target_post_id
+             */
+            if (!apply_filters('wit_copy_meta_key', true, $key, $source_post_id, $target_post_id)) {
+                continue;
+            }
+
+            delete_post_meta($target_post_id, $key);
+
+            foreach ((array) $values as $value) {
+                // get_post_meta() hands back serialized strings, and
+                // add_post_meta() expects slashed, unserialized input.
+                add_post_meta($target_post_id, $key, wp_slash(maybe_unserialize($value)));
+            }
+
+            $copied++;
+        }
+
+        return $copied;
     }
 
     /**
@@ -536,14 +626,24 @@ class WIT_WPML_Integration {
             return false;
         }
 
-        $parser      = new WIT_Content_Parser();
-        $name_result = $parser->translate_title($term->name, $target_language, $source_language);
-        $name        = !empty($name_result['error']) ? $term->name : $name_result['title'];
+        // Name and description in one request rather than one each.
+        $sources = array($term->name);
+        if ($term->description !== '') {
+            $sources[] = $term->description;
+        }
+
+        $engine  = new WIT_Translator_Engine();
+        $results = $engine->translate_batch($sources, $target_language, $source_language);
+
+        $name = (empty($results[0]['error']) && $results[0]['translation'] !== '')
+            ? $results[0]['translation']
+            : $term->name;
 
         $description = '';
         if ($term->description !== '') {
-            $description_result = $parser->translate_excerpt($term->description, $target_language, $source_language);
-            $description = !empty($description_result['error']) ? $term->description : $description_result['excerpt'];
+            $description = (empty($results[1]['error']) && $results[1]['translation'] !== '')
+                ? $results[1]['translation']
+                : $term->description;
         }
 
         // Translate the parent first so hierarchy survives.
@@ -555,11 +655,18 @@ class WIT_WPML_Integration {
                 : (int) $this->create_translated_term($term->parent, $taxonomy, $target_language, $source_language);
         }
 
+        // The clean slug when it is free. WPML itself only appends the language
+        // code on a collision; doing it unconditionally put "-en" into every
+        // translated archive URL.
+        $slug = sanitize_title($name);
+        if ($slug === '' || term_exists($slug, $taxonomy)) {
+            $slug = sanitize_title($name . '-' . $target_language);
+        }
+
         $created = wp_insert_term($name, $taxonomy, array(
             'description' => $description,
             'parent'      => $parent,
-            // Never collide with an existing slug in another language.
-            'slug'        => sanitize_title($name . '-' . $target_language),
+            'slug'        => $slug,
         ));
 
         if (is_wp_error($created)) {
@@ -568,18 +675,46 @@ class WIT_WPML_Integration {
             if (!$existing) {
                 return false;
             }
-            $created = array('term_id' => (int) $existing);
+            $existing_term = get_term((int) $existing, $taxonomy);
+            if (!$existing_term || is_wp_error($existing_term)) {
+                return false;
+            }
+            $created = array(
+                'term_id'          => (int) $existing_term->term_id,
+                'term_taxonomy_id' => (int) $existing_term->term_taxonomy_id,
+            );
         }
 
         $new_term_id = (int) $created['term_id'];
 
         // Link the new term into the original's translation group.
+        //
+        // WPML keys taxonomy rows on term_taxonomy_id; only wpml_object_id
+        // takes a term_id. Passing term_id here worked by coincidence while the
+        // two counters happened to match, and on any site that had ever
+        // deleted a term it linked translations to unrelated terms — in
+        // testing, "Servicios" resolved to the English "Marketing".
         $element_type = apply_filters('wpml_element_type', $taxonomy);
-        $trid         = apply_filters('wpml_element_trid', null, $term_id, $element_type);
+        $source_tt_id = (int) $term->term_taxonomy_id;
+        $trid         = apply_filters('wpml_element_trid', null, $source_tt_id, $element_type);
+
+        if (!$trid) {
+            // The source term has no language yet (it predates WPML, or was
+            // created by code that bypassed it). Without a group to join, every
+            // run would create one more duplicate translation. Register it.
+            do_action('wpml_set_element_language_details', array(
+                'element_id'           => $source_tt_id,
+                'element_type'         => $element_type,
+                'trid'                 => null,
+                'language_code'        => $source_language ?: $this->get_default_language(),
+                'source_language_code' => null,
+            ));
+            $trid = apply_filters('wpml_element_trid', null, $source_tt_id, $element_type);
+        }
 
         if ($trid) {
             do_action('wpml_set_element_language_details', array(
-                'element_id'           => $new_term_id,
+                'element_id'           => (int) $created['term_taxonomy_id'],
                 'element_type'         => $element_type,
                 'trid'                 => $trid,
                 'language_code'        => $target_language,

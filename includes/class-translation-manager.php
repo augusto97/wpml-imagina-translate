@@ -42,15 +42,34 @@ class WIT_Translation_Manager {
         $is_elementor    = $elementor->is_elementor_post($post_id);
 
         try {
-            // Translate title
-            $title_result = $this->content_parser->translate_title(
-                $post->post_title,
-                $target_language,
-                $source_language
+            // Title and excerpt in one request. Each used to be its own round
+            // trip, and with a real model every round trip is a second or two.
+            $fields = array();
+            if (trim((string) $post->post_title) !== '') {
+                $fields['title'] = $post->post_title;
+            }
+            if (trim((string) $post->post_excerpt) !== '') {
+                $fields['excerpt'] = $post->post_excerpt;
+            }
+
+            $batched = array();
+            if (!empty($fields)) {
+                $engine  = new WIT_Translator_Engine();
+                $results = $engine->translate_batch(array_values($fields), $target_language, $source_language);
+                $batched = array_combine(array_keys($fields), $results);
+            }
+
+            if (isset($batched['title']) && !empty($batched['title']['error'])) {
+                throw new Exception($batched['title']['error']);
+            }
+
+            $title_result = array(
+                'title' => isset($batched['title']) ? $batched['title']['translation'] : $post->post_title,
             );
 
-            if ($title_result['error']) {
-                throw new Exception($title_result['error']);
+            $excerpt = '';
+            if (isset($batched['excerpt']) && empty($batched['excerpt']['error'])) {
+                $excerpt = $batched['excerpt']['translation'];
             }
 
             // Translate content.
@@ -80,20 +99,6 @@ class WIT_Translation_Manager {
                 throw new Exception($content_result['error']);
             }
 
-            // Translate excerpt
-            $excerpt = '';
-            if (!empty($post->post_excerpt)) {
-                $excerpt_result = $this->content_parser->translate_excerpt(
-                    $post->post_excerpt,
-                    $target_language,
-                    $source_language
-                );
-
-                if (!$excerpt_result['error']) {
-                    $excerpt = $excerpt_result['excerpt'];
-                }
-            }
-
             $translated_data = array(
                 'title'   => $title_result['title'],
                 'content' => $content_result['content'],
@@ -105,7 +110,7 @@ class WIT_Translation_Manager {
 
             if ($existing_translation_id) {
                 // Update existing translation
-                $success = $this->wpml_integration->update_translated_post($existing_translation_id, $translated_data);
+                $success = $this->wpml_integration->update_translated_post($existing_translation_id, $translated_data, $post_id);
 
                 if (is_wp_error($success)) {
                     throw new Exception($success->get_error_message());

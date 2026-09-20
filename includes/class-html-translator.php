@@ -376,6 +376,14 @@ class WIT_HTML_Translator {
         if (preg_match('/^data:/i', $text)) {
             return false;
         }
+        // A bare shortcode has nothing to translate, and a model that
+        // "improves" it breaks it: in testing [gallery ids="1,2,3"] came back
+        // with text prepended and stopped being a shortcode at all. Enclosing
+        // shortcodes with real text inside still go through, with the prompt
+        // instructing the model to keep the tags.
+        if (preg_match('/^\[[a-z0-9_-]+(?:\s[^\]]*)?\/?\](?:\s*\[\/[a-z0-9_-]+\])?$/i', $text)) {
+            return false;
+        }
 
         return true;
     }

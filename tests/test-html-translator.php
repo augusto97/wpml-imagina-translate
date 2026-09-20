@@ -123,6 +123,14 @@ $cases = array(
     array('//cdn.example.com/a.js', false, 'URL sin protocolo'),
     array('data:image/png;base64,AAAA', false, 'data URI'),
     array('— · —',      false, 'solo puntuación'),
+    // Found in a real install: the shortcode block's text node went to the API
+    // and came back with text prepended, so it stopped being a shortcode.
+    array('[gallery ids="1,2,3"]',   false, 'shortcode con atributos'),
+    array('[contact-form-7 id="5"]', false, 'shortcode con guión'),
+    array('[gallery]',               false, 'shortcode a secas'),
+    array('[box][/box]',             false, 'shortcode envolvente vacío'),
+    array('[box]Texto visible[/box]', true, 'shortcode envolvente con texto sí se traduce'),
+    array('[Nota] Importante',        true, 'corchetes en prosa no son un shortcode'),
 );
 
 foreach ($cases as $case) {

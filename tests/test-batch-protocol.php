@@ -102,3 +102,75 @@ WIT_Tests::same(2, $usage['glossary'], 'ambas se contabilizan como resueltas por
 WIT_Tests::same(0, $usage['api'], 'no se gastó ninguna llamada a la API');
 
 WIT_Settings::$overrides = array();
+
+WIT_Tests::group('Respuesta de una sola cadena — preámbulo y comillas');
+
+// Found in a real install: with a chatty model the WHOLE reply, preamble
+// included, became the post title. The batch path was immune (markers); the
+// single path had no defence at all.
+$unwrap = function ($raw, $source = '') use ($engine) {
+    return WIT_Tests::call($engine, 'unwrap_single', array($raw, $source));
+};
+
+WIT_Tests::same(
+    'Título en francés',
+    $unwrap("Sure! Here is the translation:\n\n[[[1]]]\nTítulo en francés", 'Título'),
+    'descarta el preámbulo cuando el marcador está presente'
+);
+WIT_Tests::same(
+    "Primera línea\nSegunda línea",
+    $unwrap("[[[1]]]\nPrimera línea\nSegunda línea", 'x'),
+    'conserva los saltos de línea internos'
+);
+WIT_Tests::same(
+    'Traducción limpia',
+    $unwrap('**[[[1]]]**' . "\n" . 'Traducción limpia', 'x'),
+    'tolera markdown alrededor del marcador'
+);
+
+// Without the marker the behaviour must be no worse than before.
+WIT_Tests::same(
+    'Traducción sin marcador',
+    $unwrap('Traducción sin marcador', 'Original'),
+    'sin marcador devuelve la respuesta tal cual'
+);
+WIT_Tests::same(
+    'Hello world',
+    $unwrap('"Hello world"', 'Hola mundo'),
+    'quita las comillas que envuelven toda la respuesta'
+);
+WIT_Tests::same(
+    '"Hola" dijo él',
+    $unwrap('"Hola" dijo él', 'Original'),
+    'no toca comillas que no envuelven la cadena entera'
+);
+WIT_Tests::same(
+    '"Hello"',
+    $unwrap('"Hello"', '"Hola"'),
+    'si el original venía entrecomillado, las comillas son contenido'
+);
+
+WIT_Tests::group('Terminador [[[end]]] — cháchara final');
+
+// Without a terminator the last item absorbs whatever the model adds after it.
+// Seen in a real install: a title came back as "…preamble\n\nHope that helps!".
+WIT_Tests::same(
+    'Traducción',
+    $unwrap("[[[1]]]\nTraducción\n[[[end]]]\n\nHope that helps!", 'x'),
+    'descarta el texto posterior al terminador (cadena única)'
+);
+WIT_Tests::same(
+    'Traducción',
+    $unwrap("Sure!\n\n[[[1]]]\nTraducción\n[[[end]]]\nEspero que sirva.", 'x'),
+    'descarta preámbulo Y cháchara final a la vez'
+);
+
+$parsed = $parse("[[[1]]]\nUno\n[[[2]]]\nDos\n[[[end]]]\n\nEspero que te sirva.", 2);
+WIT_Tests::same('Dos', $parsed[2], 'en lote, el último elemento no absorbe la despedida');
+WIT_Tests::same('Uno', $parsed[1], 'el resto del lote no se ve afectado');
+
+$parsed = $parse("[[[1]]]\nUno\n[[[2]]]\nDos", 2);
+WIT_Tests::same('Dos', $parsed[2], 'sin terminador funciona igual que antes');
+
+$parsed = $parse("[[[1]]]\nUno\n[[[2]]]\n**[[[END]]]** ya está", 2);
+WIT_Tests::ok(!isset($parsed[2]), 'terminador en mayúsculas y con markdown también corta');
