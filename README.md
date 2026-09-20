@@ -338,6 +338,8 @@ Cosas que el plugin **no** hace todavía, para que no te pillen por sorpresa:
 
 ## 🧪 Tests
 
+### Unitarios
+
 ```bash
 php tests/run.php
 ```
@@ -345,6 +347,23 @@ php tests/run.php
 No necesita WordPress, ni base de datos, ni Composer. Cubre el tokenizador de
 HTML (fidelidad byte a byte, entidades, aislamiento de atributos), las reglas de
 campos traducibles, el glosario y el protocolo de lote.
+
+### Integración
+
+```bash
+tests/integration/setup.sh     # instala WordPress + MariaDB (una vez)
+tests/integration/run.sh       # ejecuta la suite (repetible)
+```
+
+Instala WordPress de verdad y conduce el plugin como lo haría un sitio: un
+doble de WPML sobre una tabla `icl_translations` real, un proveedor de IA local
+que responde mal a propósito, y contenido hostil. Comprueba fidelidad del
+contenido, enlazado de taxonomías, la cola bajo WP-Cron, las pantallas de
+administración y los endpoints AJAX por HTTP real.
+
+Los tests unitarios pasaban al 100 % mientras el plugin tenía siete fallos que
+solo esta suite podía ver. Detalles en
+[`tests/integration/README.md`](tests/integration/README.md).
 
 ## 🔧 Notas para desarrolladores
 
