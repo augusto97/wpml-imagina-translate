@@ -55,7 +55,7 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 - WordPress 6.0 o superior (probado hasta 7.1)
 - PHP 7.4 o superior (probado hasta 8.4)
 - WPML Multilingual CMS 4.7 o superior (probado con 4.9.x y 5.0 beta)
-- Elementor 3.x o 4.x (opcional)
+- Elementor 3.x o 4.x (opcional; probado con 4.0.8)
 - API key de OpenAI, Claude, o Gemini
 
 ### Pasos
@@ -359,10 +359,12 @@ Maintain all HTML tags, formatting, and structure.
 ## 🚦 Roadmap (Fase 2)
 
 ### Features Planeados
-- [ ] Memoria de traducción con caché local
-- [ ] Glosario personalizado (términos técnicos)
-- [ ] Soporte para Elementor y Divi
-- [ ] Detección de cambios y re-traducción automática
+- [x] Memoria de traducción con caché local
+- [x] Glosario personalizado (términos técnicos)
+- [x] Elementor, widgets clásicos y atómicos (probado con 4.0.8)
+- [ ] Divi
+- [x] Detección de cambios (estado «desactualizado»)
+- [ ] Re-traducción automática al cambiar el original
 - [ ] Integración visual en WPML UI
 - [ ] Soporte para ACF (Advanced Custom Fields)
 - [ ] Export/Import de traducciones

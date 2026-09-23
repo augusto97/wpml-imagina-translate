@@ -49,6 +49,7 @@ En Debian/Ubuntu: `apt-get install -y mariadb-server php-cli php-mysql curl unzi
 | `WIT_DB_SOCKET` | `/tmp/wit-mysql.sock` | Socket de MariaDB — **ver la nota de abajo** |
 | `WIT_DB_USER` | el usuario actual | Usuario del sistema con el que corre MariaDB |
 | `WIT_PHP` | `php` | Binario de PHP del servidor web de pruebas, para probar otra versión |
+| `WIT_ELEMENTOR_VERSION` | `4.0.8` | Versión de Elementor que se instala; `none` para omitirlo |
 
 ## Qué hay dentro
 
@@ -143,6 +144,29 @@ sitio en internet. No la sustituye: Claude tiene sus propias particularidades,
 documentadas en `claude.com/docs/connectors/building/authentication`, y la
 implementación las sigue, pero solo una conexión real las confirma.
 
+### Elementor
+
+Elementor es gratuito, así que la suite instala **el de verdad**, no un doble.
+Primero lo intenta con el ZIP publicado en wordpress.org, que es lo que usa CI.
+Si wordpress.org no responde, lo compila desde su repositorio de GitHub,
+reproduciendo los dos pasos de compilación que le faltan al código fuente:
+
+- **Twig prefijado.** php-scoper genera `vendor_prefixed/twig`, con las
+  versiones y la configuración del propio `composer.json` de Elementor. Sin
+  este paso los widgets atómicos de Elementor 4 no se renderizan.
+- **El autoloader de Composer.**
+
+`fixtures/seed-elementor.php` guarda una página con la API de documentos de
+Elementor, como lo hace el editor. Lleva encabezado, editor de texto con HTML,
+botón, lista de iconos (un repetidor), imagen con alt y leyenda, y un widget
+atómico `e-heading` con sus envoltorios `$$type`. Todos mezclan texto que se
+traduce con ajustes que no deben tocarse.
+
+`fixtures/elementor-scenario.php` traduce esa página por la API y por MCP. En
+las dos traducciones comprueba el texto traducido, los ajustes técnicos
+intactos, que Elementor carga el documento y que su renderizado muestra la
+traducción sin restos del idioma original.
+
 ### `fixtures/reset.php`
 
 Devuelve la instalación a su estado inicial sin reconstruir WordPress. Lee los
@@ -160,6 +184,7 @@ concretos, porque la divergencia de arriba garantiza que no son los obvios.
 | **E** | Los ocho endpoints AJAX, más los tres casos que **deben** rechazarse: nonce inválido, idioma inexistente, sin sesión |
 | **F** | MCP con un chat simulado: cadenas pedidas, guardado todo-o-nada, fidelidad, estados al día/desactualizado, correcciones, publicación, glosario, permisos por rol, y **cero llamadas a la API** |
 | **G** | MCP por HTTP con el cliente oficial: OAuth completo, herramientas, una traducción entera, y los ataques |
+| **I** | Elementor real, por API y por MCP: widgets clásicos y atómicos, ajustes técnicos intactos, render de Elementor, corrección de una frase dentro de un widget, desactualizado al editar desde Elementor |
 | **H** | El formulario de ajustes por `options.php`, incluido que enviar una key vacía **no** borre la guardada |
 
 En WordPress anterior a 6.9, F y G se sustituyen por la comprobación de que el
@@ -192,6 +217,11 @@ ficheros, lo que incluye todas las URLs de descubrimiento OAuth (llevan
 por eso. `router.php` hace lo que hacen Apache con el `.htaccess` de WordPress
 o nginx con `try_files`: lo que no es un fichero real va a `index.php`.
 
+**Elementor redirige la primera página de admin tras activarse** a su
+bienvenida (transient `elementor_activation_redirect`, un minuto). Una suite
+lanzada justo después de `setup.sh` lo leía como un Dashboard roto. `setup.sh`
+borra el transient.
+
 **El servidor de desarrollo de PHP es monohilo.** Una petición que dispara una
 sub-petición se bloquea contra sí misma. `run.sh` arranca con
 `PHP_CLI_SERVER_WORKERS=6`.
@@ -217,9 +247,9 @@ Conviene tenerlo claro antes de fiarse de un resultado en verde:
   la conexión desde claude.ai necesita el sitio en internet por HTTPS. Antes de
   dar por buena una versión, conviene conectarla una vez de verdad.
 
-- **Elementor.** El manejador tiene lógica sustancial (widgets clásicos y
-  *atomic* 4.x, `Document::save()`, cachés de render) y aquí no se toca nada.
-  Haría falta Elementor instalado.
+- **Todos los widgets de Elementor.** Se prueban seis, clásicos y atómicos.
+  Los de Elementor Pro (formularios, precios, carruseles) no, porque Pro no es
+  gratuito.
 - **WPML real.** Ver arriba.
 - **El navegador.** El JavaScript no se ejecuta: se comprueba que el marcado
   que necesita está presente, no que la interfaz funcione.

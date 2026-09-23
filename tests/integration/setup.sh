@@ -17,6 +17,8 @@ TEST_DIR="${WIT_TEST_DIR:-${TMPDIR:-/tmp}/wit-integration}"
 WP_VERSION="${WIT_WP_VERSION:-7.1.2}"
 WP_PORT="${WIT_WP_PORT:-8080}"
 DB_PORT="${WIT_DB_PORT:-3307}"
+# Elementor is free, so the suite installs the real thing. "none" skips it.
+ELEMENTOR_VERSION="${WIT_ELEMENTOR_VERSION:-4.0.8}"
 
 # The MariaDB UNIX socket path is limited to 107 characters by the kernel
 # struct, and a socket inside a deeply nested temp directory silently blows
@@ -147,8 +149,56 @@ cp "$PLUGIN_DIR/tests/integration/fixtures/wit-fake-ai.php" \
 
 "$WP" plugin activate sitepress-multilingual-cms wpml-imagina-translate
 
+# --- Elementor -----------------------------------------------------------------
+if [ "$ELEMENTOR_VERSION" != "none" ]; then
+  if [ ! -d "$CACHE/elementor-$ELEMENTOR_VERSION" ]; then
+    say "Descargando Elementor $ELEMENTOR_VERSION"
+    if curl -sfL --max-time 300 -o "$CACHE/elementor.zip" \
+         "https://downloads.wordpress.org/plugin/elementor.${ELEMENTOR_VERSION}.zip" 2>/dev/null; then
+      unzip -q "$CACHE/elementor.zip" -d "$CACHE/tmp-el"
+      mv "$CACHE/tmp-el/elementor" "$CACHE/elementor-$ELEMENTOR_VERSION"
+      rm -rf "$CACHE/tmp-el" "$CACHE/elementor.zip"
+    else
+      # No wordpress.org: build it from the GitHub source instead. The source
+      # tree lacks two things the published ZIP has — Twig, prefixed into
+      # vendor_prefixed/ by php-scoper, which atomic widgets need to render,
+      # and Composer's autoloader. Both are rebuilt here with the exact
+      # versions and scoper config from Elementor's own composer.json.
+      say "wordpress.org no responde, compilando Elementor desde GitHub"
+      command -v composer >/dev/null || die "hace falta composer para compilar Elementor"
+      src="$CACHE/elementor-$ELEMENTOR_VERSION"
+      git clone -q --depth 1 --branch "v$ELEMENTOR_VERSION" https://github.com/elementor/elementor "$src"
+      rm -rf "$src/.git" "$src/tests"
+      build="$CACHE/elementor-build"
+      rm -rf "$build"; mkdir -p "$build/php-scoper"
+      cp "$src/php-scoper/twig-inc.php" "$build/php-scoper/"
+      twig=$(php -r '$c=json_decode(file_get_contents($argv[1]),true); echo $c["require-dev"]["twig/twig"];' "$src/composer.json")
+      scoper=$(php -r '$c=json_decode(file_get_contents($argv[1]),true); echo $c["require-dev"]["humbug/php-scoper"];' "$src/composer.json")
+      printf '{"require":{"twig/twig":"%s","humbug/php-scoper":"%s"}}' "$twig" "$scoper" > "$build/composer.json"
+      ( cd "$build" && composer install -q --no-interaction --no-progress \
+          && php vendor/bin/php-scoper add-prefix --output-dir=./vendor_prefixed/twig \
+               --config=php-scoper/twig-inc.php --force --no-interaction >/dev/null ) \
+        || die "no se pudo compilar Twig para Elementor"
+      rm -rf "$src/vendor_prefixed/twig"
+      cp -r "$build/vendor_prefixed/twig" "$src/vendor_prefixed/twig"
+      ( cd "$src" && composer dump-autoload -q --no-scripts ) || die "no se pudo generar el autoloader de Elementor"
+      rm -rf "$build"
+    fi
+  fi
+  rm -rf "$WWW/wp-content/plugins/elementor"
+  cp -r "$CACHE/elementor-$ELEMENTOR_VERSION" "$WWW/wp-content/plugins/elementor"
+  "$WP" plugin activate elementor
+  # Elementor redirects the first admin page load after activation to its
+  # welcome screen (transient elementor_activation_redirect, one minute). A
+  # person clicks through it once; the suite would read it as a broken page.
+  "$WP" transient delete elementor_activation_redirect >/dev/null 2>&1 || true
+fi
+
 say "Sembrando contenido de prueba"
 "$WP" eval-file "$PLUGIN_DIR/tests/integration/fixtures/seed.php"
+if [ "$ELEMENTOR_VERSION" != "none" ]; then
+  "$WP" eval-file "$PLUGIN_DIR/tests/integration/fixtures/seed-elementor.php"
+fi
 
 "$WP" eval '
 $s = get_option("wit_settings");

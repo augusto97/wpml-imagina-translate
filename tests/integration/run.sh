@@ -44,7 +44,9 @@ section() { SECTION="$1"; printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 # WordPress itself cannot always reach wordpress.org from a sandbox; those
 # warnings are the environment's, not the plugin's.
-NOISE='wp_version_check|wp_update_themes|wp_update_plugins|plugins_api|wordpress\.org'
+# Elementor's own logger adds notices about its remote services and its bundled
+# Twig; they name Elementor's files, never this plugin's.
+NOISE='wp_version_check|wp_update_themes|wp_update_plugins|plugins_api|wordpress\.org|plugins/elementor/|\[Elementor Atomic Widgets\]'
 check_log() {
   if grep -Ev "$NOISE" "$LOG" 2>/dev/null | grep -q .; then
     bad "debug.log con entradas ($1): $(grep -Ev "$NOISE" "$LOG" | head -3)"
@@ -502,6 +504,97 @@ else:
 sys.exit(1 if bad else 0)
 CHECK
 check_log "mcp http"
+fi
+
+# =============================================================================
+section "I. Elementor real: por API y por MCP"
+# =============================================================================
+HAS_ELEMENTOR=$("$WP" eval 'echo (class_exists("\\Elementor\\Plugin") && !empty(get_option("wit_test_fixture")["elementor_page"])) ? "1" : "0";' 2>/dev/null | tail -1)
+if [ "$HAS_ELEMENTOR" != "1" ]; then
+  echo "  (Elementor no está instalado — WIT_ELEMENTOR_VERSION=none —, sección omitida)"
+else
+  "$WP" eval-file "$FIXTURES/reset.php" >/dev/null
+  "$WP" eval '$s = get_option("wit_settings"); $s["mcp_enabled"] = true; update_option("wit_settings", $s, false);' >/dev/null
+  : > "$LOG"; : > "$AILOG"
+  "$WP" eval-file "$FIXTURES/elementor-scenario.php" > "$TEST_DIR/elementor.json" 2>/dev/null
+
+  python3 - "$TEST_DIR/elementor.json" <<'CHECK' || FAIL=1
+import json, os, sys
+raw = open(sys.argv[1]).read()
+try:
+    # Elementor's logger may print after the JSON; read just the object.
+    d, _ = json.JSONDecoder().raw_decode(raw[raw.index('{'):])
+except Exception:
+    print("  \033[31m✗\033[0m elementor-scenario.php no devolvió JSON:\n" + raw[-2000:])
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print("::error title=I. Elementor sin JSON::" + raw[-3000:].replace("%", "%25").replace("\n", "%0A"))
+    sys.exit(1)
+
+bad = 0
+def check(ok, label, detail=""):
+    global bad
+    if ok:
+        print(f"  \033[32m✓\033[0m {label}")
+    else:
+        bad += 1
+        print(f"  \033[31m✗\033[0m {label} {detail}")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::error title=I. Elementor::{label} {detail}")
+
+widget_checks = [
+    ("builder_mode", "sigue siendo una página de Elementor"),
+    ("valid_json", "_elementor_data es JSON válido"),
+    ("heading", "encabezado traducido"),
+    ("editor", "editor de texto traducido"),
+    ("editor_markup", "el HTML del editor de texto intacto"),
+    ("button", "botón: la regla del glosario se aplica"),
+    ("list", "lista de iconos (repetidor) traducida"),
+    ("alt", "alt de la imagen traducido"),
+    ("caption", "leyenda traducida"),
+    ("atomic", "widget atómico (Elementor 4) traducido"),
+    ("atomic_tag", "etiqueta del widget atómico intacta"),
+    ("atomic_wrappers", "envoltorios $$type intactos"),
+    ("header_size", "header_size intacto"),
+    ("css_and_ids", "clases CSS, id y color intactos"),
+    ("link_and_anim", "URL del enlace, animación y tipo de botón intactos"),
+    ("icons", "iconos e ids de repetidor intactos"),
+    ("image_url", "URL de la imagen intacta"),
+    ("element_ids", "ids de elementos intactos"),
+    ("document_loads", "Elementor carga el documento"),
+    ("renders", "Elementor lo renderiza"),
+    ("render_translated", "el render muestra el texto traducido"),
+    ("render_no_source", "el render no deja texto en el idioma original"),
+    ("render_link", "el render conserva el enlace"),
+]
+
+print("  — por la API —")
+check(d.get("api_success") is True, "la traducción se crea", d.get("api_message", ""))
+for key, label in widget_checks:
+    check(d.get("api", {}).get(key) is True, label)
+
+if d.get("mcp_skipped"):
+    print("  — por MCP: omitido, este WordPress no tiene la Abilities API —")
+else:
+    print("  — por MCP —")
+    check(d.get("mcp_api_requests") == 0, "ni una llamada a la API", f"({d.get('mcp_api_requests')})")
+    check(d.get("mcp_has_widgets") is True, "prepare incluye los textos de los widgets")
+    check(d.get("mcp_no_html") is True, "al chat no le llega HTML")
+    check(d.get("mcp_no_technical") is True, "al chat no le llega ningún ajuste técnico")
+    check(d.get("mcp_glossary_skip") is True, "lo que resuelve el glosario no se manda")
+    check(d.get("mcp_saved") == "created" and d.get("mcp_no_warning") is True, "se guarda completa", f"({d.get('mcp_saved')})")
+    for key, label in widget_checks:
+        check(d.get("mcp", {}).get(key) is True, label)
+    check(d.get("status_current") == "current", "estado: al día")
+    check(d.get("review_lists_widgets") is True, "get_translation muestra los textos de los widgets")
+    check(d.get("correct_ok") is True and d.get("correct_applied") is True, "corregir una frase dentro de un widget")
+    check(d.get("correct_rest_kept") is True, "el resto de la página no se toca")
+    check(d.get("correct_renders") is True, "la corrección se ve en el render")
+    check(d.get("status_outdated_after_edit") == "outdated", "editar el original desde Elementor la deja desactualizada")
+    check(d.get("retranslate_only_changed") is True, "re-traducir pide solo el texto que cambió")
+
+sys.exit(1 if bad else 0)
+CHECK
+  check_log "elementor"
 fi
 
 # =============================================================================
