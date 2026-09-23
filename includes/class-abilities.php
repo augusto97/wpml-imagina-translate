@@ -321,6 +321,7 @@ class WIT_Abilities {
 
         $languages = array();
         $truncated = false;
+        $prints    = array(); // source fingerprints, shared across languages
 
         foreach ($wpml->get_active_languages() as $language) {
             if ($language['code'] === $default) {
@@ -336,7 +337,7 @@ class WIT_Abilities {
             }
 
             foreach ($posts as $post) {
-                $status = WIT_Translation_Status::of($post['id'], $language['code']);
+                $status = WIT_Translation_Status::of($post['id'], $language['code'], $prints);
                 $counts[$status['status']]++;
                 if ($status['translation_status'] === 'draft') {
                     $drafts++;
@@ -449,13 +450,14 @@ class WIT_Abilities {
         $wpml      = WIT_WPML_Integration::instance();
         $default   = $wpml->get_default_language();
         $languages = array();
+        $prints    = array();
 
         foreach ($wpml->get_active_languages() as $language) {
             if ($language['code'] === $default) {
                 continue;
             }
 
-            $status      = WIT_Translation_Status::of($post_id, $language['code']);
+            $status      = WIT_Translation_Status::of($post_id, $language['code'], $prints);
             $languages[] = array(
                 'language'             => $language['code'],
                 'name'                 => $language['name'],

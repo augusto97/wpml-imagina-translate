@@ -48,6 +48,7 @@ En Debian/Ubuntu: `apt-get install -y mariadb-server php-cli php-mysql curl unzi
 | `WIT_DB_PORT` | `3307` | Puerto de MariaDB (no choca con el 3306 del sistema) |
 | `WIT_DB_SOCKET` | `/tmp/wit-mysql.sock` | Socket de MariaDB — **ver la nota de abajo** |
 | `WIT_DB_USER` | el usuario actual | Usuario del sistema con el que corre MariaDB |
+| `WIT_PHP` | `php` | Binario de PHP del servidor web de pruebas, para probar otra versión |
 
 ## Qué hay dentro
 
@@ -183,6 +184,13 @@ long"*. Por eso el socket va por defecto en `/tmp/` y nunca bajo
 la ruta del sistema de archivos, y dejó `http://localhost:8080/www`: todas las
 peticiones al admin respondían 302 y se iban antes de que el plugin llegara a
 cargarse. `setup.sh` lo fija explícitamente.
+
+**El servidor de desarrollo de PHP no enruta como un servidor real.** Antes de
+PHP 8.4 responde 404 por su cuenta a cualquier ruta cuyos segmentos parezcan
+ficheros, lo que incluye todas las URLs de descubrimiento OAuth (llevan
+`/.well-known/`). La suite pasaba en local con 8.4 y fallaba en CI con 8.3 solo
+por eso. `router.php` hace lo que hacen Apache con el `.htaccess` de WordPress
+o nginx con `try_files`: lo que no es un fichero real va a `index.php`.
 
 **El servidor de desarrollo de PHP es monohilo.** Una petición que dispara una
 sub-petición se bloquea contra sí misma. `run.sh` arranca con

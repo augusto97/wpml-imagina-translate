@@ -90,6 +90,16 @@ foreach ($taxonomies as $term_id => $taxonomy) {
     ));
 }
 
+// The MCP scenario edits the first post's excerpt to make it outdated. Without
+// this, a second run on the same install would "edit" it to the value it
+// already has, nothing would change, and the outdated check would fail for a
+// reason that has nothing to do with the plugin.
+wp_update_post(array(
+    'ID'           => (int) $fixture['post'],
+    'post_title'   => 'Servicios de Imagina',
+    'post_excerpt' => 'Resumen de nuestros servicios.',
+));
+
 // The hostile-mode section overwrites the second post; restore it with strings
 // it shares with the first, so translation-memory reuse is observable.
 wp_update_post(array(

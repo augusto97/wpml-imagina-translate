@@ -215,14 +215,15 @@ section "D. Pantallas de administración por HTTP real"
 # Kill a server left behind by an interrupted run. Anchored to the start of
 # the command line: an unanchored pattern also matches any shell whose own
 # command line merely mentions it — including the one that launched this.
-for pid in $(pgrep -f "^php -S 127.0.0.1:$WP_PORT" 2>/dev/null); do
+for pid in $(pgrep -f "^[^ ]*php[0-9.]* -S 127.0.0.1:$WP_PORT" 2>/dev/null); do
   kill "$pid" 2>/dev/null
 done
 sleep 0.5
 # Several workers: a request that triggers a sub-request would deadlock against
-# a single-threaded server.
-PHP_CLI_SERVER_WORKERS=6 php -S "127.0.0.1:$WP_PORT" -t "$WWW" \
-  >"$TEST_DIR/php-server.log" 2>&1 &
+# a single-threaded server. The router makes it route like a real host — see
+# router.php for why the suite needs it before PHP 8.4.
+PHP_CLI_SERVER_WORKERS=6 "${WIT_PHP:-php}" -S "127.0.0.1:$WP_PORT" -t "$WWW" \
+  "$PLUGIN_DIR/tests/integration/router.php" >"$TEST_DIR/php-server.log" 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 20); do "${CURL[@]}" -o /dev/null "$HOST/" && break; sleep 0.5; done
 
@@ -377,6 +378,7 @@ expect = [
     ("tax_roundtrip", True, "taxonomía enlazada al término correcto"),
     ("history_via_mcp", True, "el historial lo marca como vía Claude (MCP)"),
     ("status_current", "current", "estado: al día"),
+    ("same_second_edit_detected", True, "una edición en el mismo segundo también se detecta"),
     ("status_outdated", "outdated", "editar el original la deja desactualizada"),
     ("list_outdated", True, "list_posts la muestra como desactualizada"),
     ("retranslate_only_new", True, "re-traducir pide solo la cadena que cambió"),

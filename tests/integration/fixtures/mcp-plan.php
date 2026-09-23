@@ -154,9 +154,25 @@ $out['memory_mcp'] = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$wpdb->prefix}w
 $history = $run('wit/translation-history', array('limit' => 5));
 $out['history_via_mcp'] = !is_wp_error($history) && !empty($history['items']) && $history['items'][0]['via'] === 'claude (mcp)';
 
+global $wpdb;
+
 // --- Status: current, then outdated after the original changes ---------------
 $out['status_current'] = WIT_Translation_Status::of($post, 'en')['status'];
-wp_update_post(array('ID' => $post, 'post_excerpt' => 'Resumen actualizado.'));
+
+// An edit in the same second as the translation keeps post_modified identical.
+// Forced here rather than left to timing, so the case is tested every run.
+$translation_now = (int) WIT_WPML_Integration::instance()->get_translation_id($post, 'en');
+$recorded        = get_post_meta($translation_now, WIT_Translation_Status::META_MODIFIED, true);
+$original_title  = get_post($post)->post_title;
+$wpdb->update($wpdb->posts, array('post_title' => $original_title . ' (editado)', 'post_modified_gmt' => $recorded), array('ID' => $post));
+clean_post_cache($post);
+$out['same_second_edit_detected'] = WIT_Translation_Status::of($post, 'en')['status'] === 'outdated';
+$wpdb->update($wpdb->posts, array('post_title' => $original_title), array('ID' => $post));
+clean_post_cache($post);
+// A value unique to this run, so the edit is a real change however many times
+// the suite has run on this install.
+$new_excerpt = 'Resumen actualizado ' . wp_generate_password(6, false) . '.';
+wp_update_post(array('ID' => $post, 'post_excerpt' => $new_excerpt));
 clean_post_cache($post);
 $out['status_outdated'] = WIT_Translation_Status::of($post, 'en')['status'];
 $outdated = $run('wit/list-posts', array('language' => 'en', 'status' => 'outdated'));
@@ -166,7 +182,7 @@ $out['list_outdated'] = !is_wp_error($outdated) && in_array($post, array_column(
 $again = $run('wit/prepare-translation', array('language' => 'en', 'post_ids' => array($post)));
 $out['retranslate_only_new'] = !is_wp_error($again)
     && count($again['strings']) === 1
-    && $again['strings'][0]['text'] === 'Resumen actualizado.';
+    && $again['strings'][0]['text'] === $new_excerpt;
 $saved_again = $run('wit/save-translation', array('language' => 'en', 'post_ids' => array($post), 'translations' => $chat($again['strings'], 'en')));
 $out['retranslate_updates_same'] = !is_wp_error($saved_again)
     && $saved_again['results'][0]['status'] === 'updated'

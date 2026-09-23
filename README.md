@@ -261,6 +261,7 @@ MCP, nunca para el resto de la API REST ni para `wp-admin`.
 - **Un plugin de seguridad cierra la API REST** a usuarios anónimos: permite las rutas `/wp-json/wit/v1/`.
 - **Apache no deja pasar la cabecera `Authorization`**: comprueba que el `.htaccess` de WordPress contiene `RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]` (WordPress la incluye por defecto).
 - **WordPress en una subcarpeta**: funciona, porque el descubrimiento OAuth se sirve también dentro de la propia API REST.
+- **nginx bloquea las rutas con punto**: muchas configuraciones endurecidas llevan `location ~ /\. { deny all; }`, que también bloquea `/.well-known/`, y el descubrimiento OAuth vive ahí por especificación. Cámbiala a `location ~ /\.(?!well-known) { deny all; }`. Es la misma excepción que ya necesitan los certificados de Let's Encrypt, así que en muchos servidores ya está puesta. Para comprobarlo, abre `https://tu-sitio/wp-json/wit/v1/oauth/.well-known/openid-configuration`: debe mostrar JSON, no un 403.
 
 ## 🏗️ Arquitectura Técnica
 

@@ -51,11 +51,16 @@ class WIT_Translation_Status {
     /**
      * Status of one source post in one language.
      *
-     * @param int    $source_id
-     * @param string $language
+     * @param int        $source_id
+     * @param string     $language
+     * @param array|null $cache     Optional, by reference: source fingerprints
+     *                              already computed, reused across the
+     *                              languages of one listing. Callers pass a
+     *                              fresh array per listing, never one that
+     *                              outlives a write.
      * @return array{status:string,translation_id:int,translation_status:string,translated_at:string}
      */
-    public static function of($source_id, $language) {
+    public static function of($source_id, $language, &$cache = null) {
         $translation_id = WIT_WPML_Integration::instance()->get_translation_id($source_id, $language);
 
         if (!$translation_id) {
@@ -72,15 +77,21 @@ class WIT_Translation_Status {
         if ($stored === '') {
             $status = self::UNKNOWN;
         } else {
-            $source = get_post($source_id);
+            // Always the hash. An earlier shortcut treated an unchanged
+            // modified date as an unchanged source, but post_modified has
+            // one-second resolution: an edit in the same second as the
+            // translation — an import, a script, a quick fix — kept the same
+            // date and the translation was reported current while stale.
+            if (is_array($cache)) {
+                if (!isset($cache[$source_id])) {
+                    $cache[$source_id] = self::fingerprint($source_id);
+                }
+                $current = $cache[$source_id];
+            } else {
+                $current = self::fingerprint($source_id);
+            }
 
-            // Fast path: an untouched source has an unchanged modified date,
-            // and hashing the full content of every post in a listing is not
-            // free. A changed date still falls through to the hash, because
-            // WordPress bumps it on saves that change nothing translatable.
-            $status = ($source && $source->post_modified_gmt === get_post_meta($translation_id, self::META_MODIFIED, true))
-                ? self::CURRENT
-                : (hash_equals($stored, self::fingerprint($source_id)) ? self::CURRENT : self::OUTDATED);
+            $status = hash_equals($stored, $current) ? self::CURRENT : self::OUTDATED;
         }
 
         return array(
