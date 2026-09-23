@@ -38,8 +38,11 @@ annotate() {
   printf '::error title=%s::%s\n' "$1" "$msg"
 }
 SECTION=""
-ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; }
-bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=1; annotate "${SECTION:-Integración}" "$1"; }
+# Every check, from bash or from the Python checkers, lands in one file, so the
+# totals in the CI summary count all of them.
+CHECKS="$TEST_DIR/checks.log"; : > "$CHECKS"
+ok()  { printf '  \033[32m✓\033[0m %s\n' "$1" | tee -a "$CHECKS"; }
+bad() { printf '  \033[31m✗\033[0m %s\n' "$1" | tee -a "$CHECKS"; FAIL=1; annotate "${SECTION:-Integración}" "$1"; }
 section() { SECTION="$1"; printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 # WordPress itself cannot always reach wordpress.org from a sandbox; those
@@ -336,7 +339,7 @@ else
 F_OUT=$("$WP" eval-file "$FIXTURES/mcp-plan.php" 2>/dev/null)
 printf '%s' "$F_OUT" > "$TEST_DIR/mcp-plan.json"
 
-python3 - "$TEST_DIR/mcp-plan.json" <<'CHECK' || FAIL=1
+python3 - "$TEST_DIR/mcp-plan.json" <<'CHECK' | tee -a "$CHECKS" || FAIL=1
 import json, os, sys
 raw = open(sys.argv[1]).read()
 try:
@@ -435,7 +438,7 @@ fi
 
 ( cd "$CLIENT_DIR" && timeout 180 node mcp-client.mjs "$HOST" admin admin "$POST_ID" ) > "$TEST_DIR/mcp-client.json" 2>&1
 
-python3 - "$TEST_DIR/mcp-client.json" "$(wc -l < "$AILOG")" <<'CHECK' || FAIL=1
+python3 - "$TEST_DIR/mcp-client.json" "$(wc -l < "$AILOG")" <<'CHECK' | tee -a "$CHECKS" || FAIL=1
 import json, os, sys
 raw = open(sys.argv[1]).read()
 try:
@@ -510,15 +513,18 @@ fi
 section "I. Elementor real: por API y por MCP"
 # =============================================================================
 HAS_ELEMENTOR=$("$WP" eval 'echo (class_exists("\\Elementor\\Plugin") && !empty(get_option("wit_test_fixture")["elementor_page"])) ? "1" : "0";' 2>/dev/null | tail -1)
-if [ "$HAS_ELEMENTOR" != "1" ]; then
-  echo "  (Elementor no está instalado — WIT_ELEMENTOR_VERSION=none —, sección omitida)"
+if [ "$HAS_ELEMENTOR" != "1" ] && [ "${WIT_ELEMENTOR_VERSION:-4.0.8}" = "none" ]; then
+  echo "  (WIT_ELEMENTOR_VERSION=none: sección omitida a propósito)"
+elif [ "$HAS_ELEMENTOR" != "1" ]; then
+  # Skipping silently would turn this section into one that always passes.
+  bad "Elementor debía estar instalado y no lo está (¿falló la descarga en setup.sh?)"
 else
   "$WP" eval-file "$FIXTURES/reset.php" >/dev/null
   "$WP" eval '$s = get_option("wit_settings"); $s["mcp_enabled"] = true; update_option("wit_settings", $s, false);' >/dev/null
   : > "$LOG"; : > "$AILOG"
   "$WP" eval-file "$FIXTURES/elementor-scenario.php" > "$TEST_DIR/elementor.json" 2>/dev/null
 
-  python3 - "$TEST_DIR/elementor.json" <<'CHECK' || FAIL=1
+  python3 - "$TEST_DIR/elementor.json" <<'CHECK' | tee -a "$CHECKS" || FAIL=1
 import json, os, sys
 raw = open(sys.argv[1]).read()
 try:
@@ -642,6 +648,16 @@ $s["ai_provider"] = "openai"; $s["openai_api_key"] = "sk-test-fake";
 $s["batch_size"] = 2; $s["enable_translation_memory"] = true;
 $s["glossary"] = "Imagina\nContacta con nosotros = Get in touch";
 update_option("wit_settings", $s, false);' >/dev/null
+
+# A summary annotation in CI: proof of what actually ran, readable through the
+# API even when the raw log is not — a section that silently skipped would
+# otherwise look exactly like one that passed.
+if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  el_version=$("$WP" eval 'echo defined("ELEMENTOR_VERSION") ? ELEMENTOR_VERSION : "ninguno";' 2>/dev/null | tail -1)
+  printf '::notice title=Resumen de integración::WordPress %s · Elementor %s · Abilities API %s · %s comprobaciones correctas, %s fallidas\n' \
+    "$("$WP" core version 2>/dev/null)" "$el_version" "$([ "$HAS_ABILITIES" = "1" ] && echo sí || echo no)" \
+    "$(grep -c '✓' "$CHECKS")" "$(grep -c '✗' "$CHECKS")"
+fi
 
 echo
 if [ $FAIL = 0 ]; then
