@@ -18,15 +18,11 @@ SLUG="wpml-imagina-translate"
 
 cd "$PLUGIN_DIR"
 
-VERSION=$(grep -oP '^ \* Version:\s*\K[0-9.]+' "$SLUG.php")
-[ -n "$VERSION" ] || { echo "No se pudo leer la versión del encabezado del plugin" >&2; exit 1; }
-
-# The header version drives maybe_upgrade(); a mismatch means an updated site
-# would skip creating new tables and fail silently.
-CONST_VERSION=$(grep -oP "define\('WIT_VERSION',\s*'\K[0-9.]+" "$SLUG.php")
-if [ "$VERSION" != "$CONST_VERSION" ]; then
-  echo "La versión del encabezado ($VERSION) y WIT_VERSION ($CONST_VERSION) no coinciden" >&2
-  exit 1
+# git archive packages HEAD, not the working tree. Uncommitted changes are
+# therefore NOT in the ZIP — say so, because a build that silently leaves out
+# the work in progress is how a release ships without its new files.
+if [ -n "$(git status --porcelain)" ]; then
+  echo "AVISO: hay cambios sin commitear; el ZIP contiene HEAD ($(git rev-parse --short HEAD)), no el árbol de trabajo." >&2
 fi
 
 STAGE=$(mktemp -d)
@@ -37,6 +33,19 @@ mkdir -p "$STAGE/$SLUG" "$OUT_DIR"
 # git archive, so only committed files ship: no stray local edits, no scratch
 # files, no .git.
 git archive HEAD | tar -x -C "$STAGE/$SLUG"
+
+# Version read from what is being packaged. Reading it from the working tree
+# would label a HEAD archive with whatever version is being edited.
+VERSION=$(grep -oP '^ \* Version:\s*\K[0-9.]+' "$STAGE/$SLUG/$SLUG.php")
+[ -n "$VERSION" ] || { echo "No se pudo leer la versión del encabezado del plugin" >&2; exit 1; }
+
+# The header version drives maybe_upgrade(); a mismatch means an updated site
+# would skip creating new tables and fail silently.
+CONST_VERSION=$(grep -oP "define\('WIT_VERSION',\s*'\K[0-9.]+" "$STAGE/$SLUG/$SLUG.php")
+if [ "$VERSION" != "$CONST_VERSION" ]; then
+  echo "La versión del encabezado ($VERSION) y WIT_VERSION ($CONST_VERSION) no coinciden" >&2
+  exit 1
+fi
 rm -rf "$STAGE/$SLUG/tests" "$STAGE/$SLUG/tools" "$STAGE/$SLUG/.gitignore" "$STAGE/$SLUG/.github"
 
 ZIP="$OUT_DIR/$SLUG-$VERSION.zip"
