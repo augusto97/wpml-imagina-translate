@@ -1,5 +1,7 @@
 # WPML Imagina Translate
 
+[![Tests](https://github.com/augusto97/wpml-imagina-translate/actions/workflows/tests.yml/badge.svg)](https://github.com/augusto97/wpml-imagina-translate/actions/workflows/tests.yml)
+
 Plugin de WordPress para traducir automáticamente contenido usando tu propia API key de IA. Integración perfecta con WPML.
 
 ## 🚀 ¿Por qué este plugin?
@@ -364,6 +366,21 @@ administración y los endpoints AJAX por HTTP real.
 Los tests unitarios pasaban al 100 % mientras el plugin tenía siete fallos que
 solo esta suite podía ver. Detalles en
 [`tests/integration/README.md`](tests/integration/README.md).
+
+## 📦 Construir el instalable
+
+```bash
+tools/build-zip.sh          # deja el ZIP en dist/
+```
+
+Empaqueta desde `git archive HEAD`, así que solo entra lo commiteado. Excluye
+`tests/`, `tools/` y `.github/`, y verifica el resultado antes de darlo por
+bueno: que todos los PHP parseen, que cada `require_once` resuelva dentro del
+archivo, que haya una única carpeta raíz y que la versión del encabezado
+coincida con `WIT_VERSION` — si no coinciden, un sitio actualizado se saltaría
+la creación de tablas y fallaría en silencio.
+
+CI lo ejecuta en cada push y sube el ZIP como artefacto.
 
 ## 🔧 Notas para desarrolladores
 

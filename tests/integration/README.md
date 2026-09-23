@@ -45,7 +45,8 @@ En Debian/Ubuntu: `apt-get install -y mariadb-server php-cli php-mysql curl unzi
 | `WIT_WP_VERSION` | `6.8.2` | Versión de WordPress |
 | `WIT_WP_PORT` | `8080` | Puerto del servidor de pruebas |
 | `WIT_DB_PORT` | `3307` | Puerto de MariaDB (no choca con el 3306 del sistema) |
-| `WIT_DB_SOCKET` | `/run/mysqld/wit.sock` | Socket de MariaDB — **ver la nota de abajo** |
+| `WIT_DB_SOCKET` | `/tmp/wit-mysql.sock` | Socket de MariaDB — **ver la nota de abajo** |
+| `WIT_DB_USER` | el usuario actual | Usuario del sistema con el que corre MariaDB |
 
 ## Qué hay dentro
 
@@ -140,7 +141,8 @@ otra vez una hora.
 **El socket de MariaDB no puede pasar de 107 caracteres.** Es un límite del
 kernel (`struct sockaddr_un`). Un socket dentro de un directorio temporal
 anidado lo supera y el servidor aborta con *"The socket file path is too
-long"*. Por eso el socket va en `/run/mysqld/` y no bajo `$WIT_TEST_DIR`.
+long"*. Por eso el socket va por defecto en `/tmp/` y nunca bajo
+`$WIT_TEST_DIR`.
 
 **`siteurl` tiene que coincidir con el host que se pide.** wp-cli lo deduce de
 la ruta del sistema de archivos, y dejó `http://localhost:8080/www`: todas las

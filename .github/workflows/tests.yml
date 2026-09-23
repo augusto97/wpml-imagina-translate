@@ -1,0 +1,139 @@
+name: Tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run's result irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    # The plugin header claims PHP 7.4, so it is tested on 7.4, not only on
+    # whatever the runner happens to ship.
+    name: Unitarios (PHP ${{ matrix.php }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mbstring, dom, json, libxml
+          coverage: none
+          tools: none
+
+      - name: Lint de todos los ficheros PHP
+        run: |
+          fail=0
+          while IFS= read -r f; do
+            php -l "$f" >/dev/null || fail=1
+          done < <(git ls-files '*.php')
+          exit $fail
+
+      - name: Tests unitarios
+        run: php tests/run.php
+
+  javascript:
+    name: Lint de JavaScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: |
+          fail=0
+          while IFS= read -r f; do
+            node --check "$f" || fail=1
+          done < <(git ls-files '*.js')
+          exit $fail
+
+  integration:
+    # The suite that found the defects unit tests could not: real WordPress,
+    # real database, real HTTP.
+    name: Integración
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      WIT_TEST_DIR: ${{ github.workspace }}/../wit-integration
+      # Short and always writable: the kernel caps a UNIX socket path at 107
+      # characters, and the runner is not root so /run/mysqld is out.
+      WIT_DB_SOCKET: /tmp/wit-mysql.sock
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, dom, json, libxml, curl, zip, mysqli, gd, intl, exif, fileinfo
+          coverage: none
+          tools: none
+
+      - name: Instalar MariaDB
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq mariadb-server mariadb-client
+          # setup.sh starts its own instance with its own datadir; the packaged
+          # service would only compete for the port.
+          sudo systemctl stop mariadb 2>/dev/null || true
+
+      - name: Cachear WordPress y wp-cli
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.WIT_TEST_DIR }}/cache
+          key: wit-cache-wp6.8.2-wpcli2.11.0
+
+      - name: Construir la instalación
+        run: tests/integration/setup.sh
+
+      - name: Ejecutar la suite
+        run: tests/integration/run.sh
+
+      - name: Registros en caso de fallo
+        if: failure()
+        run: |
+          echo "=== debug.log ==="
+          tail -60 "$WIT_TEST_DIR/www/wp-content/debug.log" 2>/dev/null || echo "(vacío)"
+          echo "=== servidor PHP ==="
+          tail -40 "$WIT_TEST_DIR/php-server.log" 2>/dev/null || echo "(sin log)"
+          echo "=== MariaDB ==="
+          tail -40 "$WIT_TEST_DIR/mysql.err" 2>/dev/null || echo "(sin log)"
+          echo "=== cadenas enviadas a la API ==="
+          tail -20 "$WIT_TEST_DIR/www/wp-content/wit-ai-requests.log" 2>/dev/null || echo "(ninguna)"
+
+  package:
+    # The ZIP is what actually gets installed on a client site, so it is built
+    # and verified on every push rather than by hand at release time.
+    name: Paquete instalable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+          tools: none
+
+      - name: Construir y verificar el ZIP
+        run: tools/build-zip.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wpml-imagina-translate-zip
+          path: dist/*.zip
+          if-no-files-found: error

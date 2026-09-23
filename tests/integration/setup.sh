@@ -22,7 +22,11 @@ DB_PORT="${WIT_DB_PORT:-3307}"
 # struct, and a socket inside a deeply nested temp directory silently blows
 # past it ("The socket file path is too long"). Keep it short and outside
 # $TEST_DIR.
-DB_SOCKET="${WIT_DB_SOCKET:-/run/mysqld/wit.sock}"
+DB_SOCKET="${WIT_DB_SOCKET:-/tmp/wit-mysql.sock}"
+
+# mariadbd refuses to run as root unless told to explicitly, and a CI runner
+# is not root, so ask the system who we are instead of assuming.
+DB_USER="${WIT_DB_USER:-$(id -un)}"
 
 WWW="$TEST_DIR/www"
 CACHE="$TEST_DIR/cache"
@@ -75,13 +79,13 @@ WP="$TEST_DIR/wp"
 say "Arrancando MariaDB en el puerto $DB_PORT"
 mkdir -p "$(dirname "$DB_SOCKET")" "$TEST_DIR/mysql"
 if [ ! -d "$TEST_DIR/mysql/mysql" ]; then
-  mariadb-install-db --user=root --datadir="$TEST_DIR/mysql" \
+  mariadb-install-db --user="$DB_USER" --datadir="$TEST_DIR/mysql" \
     --auth-root-authentication-method=normal >/dev/null 2>&1 \
     || die "mariadb-install-db falló"
 fi
 
 if ! mariadb --socket="$DB_SOCKET" -uroot -e "SELECT 1" >/dev/null 2>&1; then
-  nohup mariadbd --user=root --datadir="$TEST_DIR/mysql" --socket="$DB_SOCKET" \
+  nohup mariadbd --user="$DB_USER" --datadir="$TEST_DIR/mysql" --socket="$DB_SOCKET" \
     --port="$DB_PORT" --bind-address=127.0.0.1 \
     --pid-file="$TEST_DIR/mysql.pid" --log-error="$TEST_DIR/mysql.err" >/dev/null 2>&1 &
   for _ in $(seq 1 30); do
