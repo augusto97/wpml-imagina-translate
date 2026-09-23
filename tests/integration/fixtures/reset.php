@@ -20,7 +20,15 @@ if (!is_array($fixture) || empty($fixture['post'])) {
 }
 
 $keep_posts = array((int) $fixture['post'], (int) $fixture['page'], (int) $fixture['attachment']);
-$elementor  = !empty($fixture['elementor_page']) ? (int) $fixture['elementor_page'] : 0;
+// Pages seeded after the rest (Elementor, Elementor Pro) have ids above
+// $max_post and are sources too; every *_page entry in the fixture survives.
+$extra = array();
+foreach ($fixture as $name => $id) {
+    if (substr($name, -5) === '_page' && (int) $id > 0) {
+        $extra[] = (int) $id;
+    }
+}
+$extra_in = $extra ? implode(',', array_map('intval', $extra)) : '0';
 $keep_terms = array(
     (int) $fixture['cat_parent'],
     (int) $fixture['cat_child'],
@@ -35,11 +43,11 @@ $max_term = max($keep_terms);
 // The Elementor page is seeded after the rest, so its id is higher than
 // $max_post; it is a source and must survive the sweep.
 $wpdb->query($wpdb->prepare(
-    "DELETE FROM {$wpdb->posts} WHERE ID > %d AND ID <> %d AND post_type IN ('post','page')",
-    $max_post, $elementor
+    "DELETE FROM {$wpdb->posts} WHERE ID > %d AND ID NOT IN ({$extra_in}) AND post_type IN ('post','page')",
+    $max_post
 ));
-$wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->postmeta} WHERE post_id > %d AND post_id <> %d", $max_post, $elementor));
-$wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->term_relationships} WHERE object_id > %d AND object_id <> %d", $max_post, $elementor));
+$wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->postmeta} WHERE post_id > %d AND post_id NOT IN ({$extra_in})", $max_post));
+$wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->term_relationships} WHERE object_id > %d AND object_id NOT IN ({$extra_in})", $max_post));
 $wpdb->query($wpdb->prepare(
     "DELETE tt, t FROM {$wpdb->term_taxonomy} tt
      JOIN {$wpdb->terms} t USING(term_id) WHERE t.term_id > %d",
@@ -59,9 +67,9 @@ clean_post_cache((int) $fixture['post']);
 clean_post_cache((int) $fixture['page']);
 
 $sources = array($fixture['post'] => 'post', $fixture['page'] => 'page');
-if ($elementor) {
-    $sources[$elementor] = 'page';
-    clean_post_cache($elementor);
+foreach ($extra as $id) {
+    $sources[$id] = 'page';
+    clean_post_cache($id);
 }
 
 foreach ($sources as $id => $type) {

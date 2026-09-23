@@ -49,7 +49,7 @@ section() { SECTION="$1"; printf '\n\033[1m%s\033[0m\n' "$1"; }
 # warnings are the environment's, not the plugin's.
 # Elementor's own logger adds notices about its remote services and its bundled
 # Twig; they name Elementor's files, never this plugin's.
-NOISE='wp_version_check|wp_update_themes|wp_update_plugins|plugins_api|wordpress\.org|plugins/elementor/|\[Elementor Atomic Widgets\]'
+NOISE='wp_version_check|wp_update_themes|wp_update_plugins|plugins_api|wordpress\.org|plugins/elementor/|plugins/elementor-pro/|\[Elementor Atomic Widgets\]'
 check_log() {
   if grep -Ev "$NOISE" "$LOG" 2>/dev/null | grep -q .; then
     bad "debug.log con entradas ($1): $(grep -Ev "$NOISE" "$LOG" | head -3)"
@@ -601,6 +601,101 @@ else:
 sys.exit(1 if bad else 0)
 CHECK
   check_log "elementor"
+fi
+
+# =============================================================================
+section "J. Elementor Pro: por API y por MCP, y el formulario enviado de verdad"
+# =============================================================================
+HAS_PRO=$("$WP" eval 'echo (defined("ELEMENTOR_PRO_VERSION") && !empty(get_option("wit_test_fixture")["elementor_pro_page"])) ? "1" : "0";' 2>/dev/null | tail -1)
+if [ "$HAS_PRO" != "1" ]; then
+  # Optional by design: Pro is not free and CI never has it.
+  echo "  (Elementor Pro no instalado — pásalo con WIT_ELEMENTOR_PRO_ZIP a setup.sh —, sección omitida)"
+else
+  "$WP" eval-file "$FIXTURES/reset.php" >/dev/null
+  "$WP" eval '$s = get_option("wit_settings"); $s["mcp_enabled"] = true; update_option("wit_settings", $s, false);' >/dev/null
+  : > "$LOG"; : > "$AILOG"
+  "$WP" eval-file "$FIXTURES/elementor-pro-scenario.php" > "$TEST_DIR/elementor-pro.json" 2>/dev/null
+
+  python3 - "$TEST_DIR/elementor-pro.json" <<'CHECK' | tee -a "$CHECKS" || FAIL=1
+import json, os, sys
+raw = open(sys.argv[1]).read()
+try:
+    d, _ = json.JSONDecoder().raw_decode(raw[raw.index('{'):])
+except Exception:
+    print("  \033[31m✗\033[0m elementor-pro-scenario.php no devolvió JSON:\n" + raw[-2000:]); sys.exit(1)
+bad = 0
+def check(ok, label):
+    global bad
+    print(("  \033[32m✓\033[0m " if ok else "  \033[31m✗\033[0m ") + label)
+    if not ok:
+        bad += 1
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::error title=J. Elementor Pro::{label}")
+labels = [
+    ("form_labels", "formulario: etiquetas y placeholders traducidos"),
+    ("form_messages", "formulario: mensajes de éxito y error traducidos"),
+    ("form_button", "formulario: botón traducido"),
+    ("submit_actions", "formulario: las acciones al enviar (email, redirección) intactas"),
+    ("required", "formulario: los campos obligatorios siguen siéndolo"),
+    ("custom_ids", "formulario: los ids de campo intactos"),
+    ("field_types", "formulario: los tipos de campo intactos"),
+    ("email_setup", "formulario: destinatario, remitente y [all-fields] intactos"),
+    ("redirect", "formulario: URL de redirección intacta"),
+    ("email_placeholder", "formulario: un placeholder que es un email no se traduce"),
+    ("options_valued", "opciones «Etiqueta|valor»: etiqueta traducida, valor conservado"),
+    ("options_unvalued", "opciones sin valor: se fija el original, lo enviado no cambia"),
+    ("price_text", "tabla de precios: textos traducidos"),
+    ("currency", "tabla de precios: moneda, precio y enlace intactos"),
+    ("headline_words", "titular animado: cada palabra rotatoria traducida, mismas líneas"),
+    ("headline_setup", "titular animado: estilo, animación y marcador intactos"),
+    ("countdown_text", "cuenta atrás: etiquetas y mensaje traducidos"),
+    ("countdown_setup", "cuenta atrás: fecha, tipo y acción al terminar intactos"),
+    ("flip", "flip box: textos traducidos, efecto intacto"),
+    ("slides", "slides: textos traducidos, enlaces y colores intactos"),
+    ("quote", "cita: textos traducidos, interruptor y estilo intactos"),
+    ("renders", "Elementor renderiza la traducción"),
+    ("render_options", "el formulario renderizado envía los valores originales"),
+]
+for path, title in (("api", "por la API"), ("mcp", "por MCP")):
+    if path == "mcp" and d.get("mcp_skipped"):
+        print("  — por MCP: omitido, este WordPress no tiene la Abilities API —"); continue
+    print(f"  — {title} —")
+    for key, label in labels:
+        check(d.get(path, {}).get(key) is True, label)
+if not d.get("mcp_skipped"):
+    check(d.get("mcp_api_requests") == 0, "MCP: ni una llamada a la API")
+    check(d.get("mcp_no_technical") is True, "MCP: al chat no le llega ningún valor técnico del formulario")
+    check(d.get("mcp_option_labels") is True, "MCP: al chat le llegan las etiquetas de las opciones, no los valores")
+    check(d.get("mcp_headline_lines") is True, "MCP: las palabras rotatorias llegan una a una")
+sys.exit(1 if bad else 0)
+CHECK
+
+  # The check that matters: submit the form as a visitor would. With the old
+  # field rules the translated form answered "thank you" and sent nothing.
+  echo "  — el formulario, enviado de verdad —"
+  MAILLOG="$WWW/wp-content/wit-mail.log"
+  submit() {
+    "${CURL[@]}" -X POST "$HOST/wp-admin/admin-ajax.php" \
+      --data-urlencode "action=elementor_pro_forms_send_form" --data-urlencode "post_id=$1" \
+      --data-urlencode "queried_id=$1" --data-urlencode "form_id=pf00001" \
+      --data-urlencode "form_fields[nombre]=$2" --data-urlencode "form_fields[email]=ana@cliente.example" \
+      --data-urlencode "form_fields[tema]=presupuesto" --data-urlencode "form_fields[mensaje]=Hola" \
+      --data-urlencode "form_fields[turno]=Mañana" --data-urlencode "form_fields[acepto]=on"
+  }
+  read -r PRO_SRC PRO_EN PRO_FR < <(python3 -c "import json,sys;r=open(sys.argv[1]).read();d,_=json.JSONDecoder().raw_decode(r[r.index('{'):]);print(d['source'],d.get('api_id',0),d.get('mcp_id',0))" "$TEST_DIR/elementor-pro.json")
+  for pair in "original:$PRO_SRC" "traducido por API:$PRO_EN" "traducido por MCP:$PRO_FR"; do
+    id=${pair##*:}; name=${pair%%:*}
+    [ "$id" = "0" ] && continue
+    : > "$MAILLOG"
+    resp=$(submit "$id" "Ana")
+    redirect=$(printf '%s' "$resp" | python3 -c "import json,sys;d=json.load(sys.stdin);x=(d.get('data') or {}).get('data');print(x.get('redirect_url','') if isinstance(x,dict) else '')" 2>/dev/null)
+    mails=$(grep -c . "$MAILLOG" 2>/dev/null || echo 0)
+    values=$(python3 -c "import json;m=json.loads(open('$MAILLOG').readline());print('ok' if m['to']=='info@imagina.example' and 'presupuesto' in m['message'] and 'Mañana' in m['message'] else 'mal')" 2>/dev/null)
+    [ "$mails" = "1" ] && [ "$values" = "ok" ] && ok "$name: el email llega a info@ con los valores originales" || bad "$name: emails=$mails valores=$values"
+    [ "$redirect" = "https://imagina.example/gracias" ] && ok "$name: redirige" || bad "$name: no redirige ($redirect)"
+    printf '%s' "$(submit "$id" "")" | grep -q '"success":false' && ok "$name: sin nombre se rechaza (el campo sigue siendo obligatorio)" || bad "$name: acepta el envío sin el campo obligatorio"
+  done
+  check_log "elementor pro"
 fi
 
 # =============================================================================

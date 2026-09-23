@@ -19,6 +19,9 @@ WP_PORT="${WIT_WP_PORT:-8080}"
 DB_PORT="${WIT_DB_PORT:-3307}"
 # Elementor is free, so the suite installs the real thing. "none" skips it.
 ELEMENTOR_VERSION="${WIT_ELEMENTOR_VERSION:-4.0.8}"
+# Elementor Pro is not free, so it is never downloaded: pass your own ZIP to
+# include it. CI does not have it.
+ELEMENTOR_PRO_ZIP="${WIT_ELEMENTOR_PRO_ZIP:-}"
 
 # The MariaDB UNIX socket path is limited to 107 characters by the kernel
 # struct, and a socket inside a deeply nested temp directory silently blows
@@ -146,6 +149,8 @@ cp "$PLUGIN_DIR/tests/integration/fixtures/sitepress-stub.php" \
    "$WWW/wp-content/plugins/sitepress-multilingual-cms/sitepress.php"
 cp "$PLUGIN_DIR/tests/integration/fixtures/wit-fake-ai.php" \
    "$WWW/wp-content/mu-plugins/wit-fake-ai.php"
+cp "$PLUGIN_DIR/tests/integration/fixtures/wit-mail-catcher.php" \
+   "$WWW/wp-content/mu-plugins/wit-mail-catcher.php"
 
 "$WP" plugin activate sitepress-multilingual-cms wpml-imagina-translate
 
@@ -192,12 +197,27 @@ if [ "$ELEMENTOR_VERSION" != "none" ]; then
   # welcome screen (transient elementor_activation_redirect, one minute). A
   # person clicks through it once; the suite would read it as a broken page.
   "$WP" transient delete elementor_activation_redirect >/dev/null 2>&1 || true
+
+  if [ -n "$ELEMENTOR_PRO_ZIP" ]; then
+    [ -f "$ELEMENTOR_PRO_ZIP" ] || die "WIT_ELEMENTOR_PRO_ZIP no existe: $ELEMENTOR_PRO_ZIP"
+    say "Instalando Elementor Pro desde $ELEMENTOR_PRO_ZIP"
+    # Some redistributed builds fetch template libraries from a third-party
+    # mirror named by this constant; empty keeps the test site off it.
+    "$WP" config set ELEMENTOR_PRO_LIB_BASE '' --type=constant >/dev/null
+    rm -rf "$WWW/wp-content/plugins/elementor-pro"
+    unzip -q -o "$ELEMENTOR_PRO_ZIP" -d "$WWW/wp-content/plugins/"
+    "$WP" plugin activate elementor-pro
+    "$WP" transient delete elementor_activation_redirect >/dev/null 2>&1 || true
+  fi
 fi
 
 say "Sembrando contenido de prueba"
 "$WP" eval-file "$PLUGIN_DIR/tests/integration/fixtures/seed.php"
 if [ "$ELEMENTOR_VERSION" != "none" ]; then
   "$WP" eval-file "$PLUGIN_DIR/tests/integration/fixtures/seed-elementor.php"
+  if [ -n "$ELEMENTOR_PRO_ZIP" ]; then
+    "$WP" eval-file "$PLUGIN_DIR/tests/integration/fixtures/seed-elementor-pro.php"
+  fi
 fi
 
 "$WP" eval '

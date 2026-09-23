@@ -405,7 +405,7 @@ class WIT_Elementor_Handler {
             }
 
             if (!empty($element['settings']) && is_array($element['settings'])) {
-                $this->walk_settings($element['settings'], $originals, null, '');
+                $this->walk_settings($element['settings'], $originals, null, '', $this->controls_for($element));
             }
 
             if (!empty($element['elements']) && is_array($element['elements'])) {
@@ -427,7 +427,7 @@ class WIT_Elementor_Handler {
 
             if (!empty($element['settings']) && is_array($element['settings'])) {
                 $unused = array();
-                $elements[$index]['settings'] = $this->walk_settings($element['settings'], $unused, $map, '');
+                $elements[$index]['settings'] = $this->walk_settings($element['settings'], $unused, $map, '', $this->controls_for($element));
             }
 
             if (!empty($element['elements']) && is_array($element['elements'])) {
@@ -451,7 +451,7 @@ class WIT_Elementor_Handler {
      * @param string     $key       Key of the current node.
      * @return array The (possibly modified) settings.
      */
-    private function walk_settings(array $settings, array &$originals, $map, $key) {
+    private function walk_settings(array $settings, array &$originals, $map, $key, $controls = null) {
         // ---- atomic prop wrapper: { "$$type": T, "value": V } ----
         if (isset($settings['$$type']) && array_key_exists('value', $settings)) {
             $type = $settings['$$type'];
@@ -487,6 +487,34 @@ class WIT_Elementor_Handler {
 
             if (in_array($effective_key, self::$skip_element_keys, true)) {
                 continue;
+            }
+
+            // Elementor knows what every control is. When it says a setting is
+            // a select, a switcher, a date or a URL, that settles it — whatever
+            // the value looks like. Heuristics alone read "euro", "circle" or
+            // "email" as words, and translated a form's submit_actions into
+            // values Elementor does not recognise: the form kept showing and
+            // silently stopped sending.
+            $control = (is_array($controls) && is_string($child_key) && isset($controls[$child_key]))
+                ? $controls[$child_key]
+                : null;
+
+            if ($control !== null) {
+                $type = isset($control['type']) ? (string) $control['type'] : '';
+
+                if (self::is_repeater_type($type) && is_array($value)) {
+                    $fields = self::field_controls($control);
+                    foreach ($value as $i => $item) {
+                        if (is_array($item)) {
+                            $settings[$child_key][$i] = $this->walk_settings($item, $originals, $map, $effective_key, $fields);
+                        }
+                    }
+                    continue;
+                }
+
+                if (!in_array($type, self::$text_control_types, true)) {
+                    continue;
+                }
             }
 
             if (is_array($value)) {
@@ -549,6 +577,14 @@ class WIT_Elementor_Handler {
      * @return string
      */
     private function handle_string($value, array &$originals, $map, $key, $is_html) {
+        if ($key === 'field_options') {
+            return $this->handle_options($value, $originals, $map);
+        }
+
+        if ($key === 'rotating_text') {
+            return $this->handle_lines($value, $originals, $map);
+        }
+
         if ($is_html) {
             if (WIT_Field_Rules::is_blocked_key($key)) {
                 return $value;
@@ -591,6 +627,181 @@ class WIT_Elementor_Handler {
      * @param string $value
      * @return bool
      */
+    /**
+     * Control types whose value is text a visitor reads.
+     *
+     * Everything else Elementor registers — select, select2, switcher,
+     * choose, number, slider, color, url, date_time, icons, hidden, animation
+     * and the rest — holds a machine value, and translating it breaks the
+     * widget. media is kept so its alt text is still reached (the field rules
+     * leave its url and id alone), and code so free HTML keeps being handled
+     * by the tokenizer as before.
+     *
+     * @var string[]
+     */
+    private static $text_control_types = array('text', 'textarea', 'wysiwyg', 'code', 'media');
+
+    /** @var array<string,array|null> Controls per element type, per request. */
+    private $controls_cache = array();
+
+    /**
+     * Elementor's control definitions for an element, keyed by setting name.
+     *
+     * Null when Elementor is not loaded or does not know the element — then
+     * the field rules decide alone, as they always have.
+     *
+     * @param array $element
+     * @return array|null
+     */
+    private function controls_for(array $element) {
+        if (!$this->is_available()) {
+            return null;
+        }
+
+        $el_type = isset($element['elType']) ? (string) $element['elType'] : '';
+        $name    = $el_type === 'widget' && isset($element['widgetType']) ? (string) $element['widgetType'] : $el_type;
+
+        if ($name === '') {
+            return null;
+        }
+
+        if (array_key_exists($name, $this->controls_cache)) {
+            return $this->controls_cache[$name];
+        }
+
+        $controls = null;
+
+        try {
+            $plugin   = \Elementor\Plugin::$instance;
+            $instance = $el_type === 'widget'
+                ? $plugin->widgets_manager->get_widget_types($name)
+                : $plugin->elements_manager->get_element_types($name);
+
+            if ($instance && method_exists($instance, 'get_controls')) {
+                $list = $instance->get_controls();
+                $controls = is_array($list) && !empty($list) ? $list : null;
+            }
+        } catch (\Throwable $e) {
+            $controls = null;
+        }
+
+        return $this->controls_cache[$name] = $controls;
+    }
+
+    /**
+     * repeater, form-fields-repeater, nested-elements-repeater…
+     *
+     * @param string $type
+     * @return bool
+     */
+    private static function is_repeater_type($type) {
+        return $type !== '' && substr($type, -8) === 'repeater';
+    }
+
+    /**
+     * A repeater's field definitions keyed by setting name.
+     *
+     * Elementor stores them as a list with a "name" key in some versions and
+     * keyed by name in others.
+     *
+     * @param array $control
+     * @return array
+     */
+    private static function field_controls(array $control) {
+        $fields = array();
+
+        foreach (isset($control['fields']) ? (array) $control['fields'] : array() as $index => $field) {
+            if (!is_array($field)) {
+                continue;
+            }
+            $name = isset($field['name']) ? (string) $field['name'] : (string) $index;
+            $fields[$name] = $field;
+        }
+
+        return $fields;
+    }
+
+    /**
+     * A form select/radio/checkbox field's options: one per line, "Label" or
+     * "Label|value".
+     *
+     * Only the label is translated. The value is what the form submits, and
+     * integrations, conditions and anything that reads submissions key on it:
+     * a translated value quietly stops matching. When an option has no value,
+     * Elementor submits the label, so the source label is written in as the
+     * value — the visitor reads the translation, the site keeps receiving the
+     * same value in every language.
+     *
+     * @return string
+     */
+    private function handle_options($value, array &$originals, $map) {
+        $lines = explode("\n", str_replace(array("\r\n", "\r"), "\n", $value));
+        $out   = array();
+
+        foreach ($lines as $line) {
+            $parts = explode('|', $line, 2);
+            $label = trim($parts[0]);
+
+            if ($label === '' || !WIT_HTML_Translator::is_translatable($label)) {
+                $out[] = $line;
+                continue;
+            }
+
+            if ($map === null) {
+                if (!isset($originals[$label])) {
+                    $originals[$label] = count($originals);
+                }
+                $out[] = $line;
+                continue;
+            }
+
+            if (!isset($map[$label])) {
+                $out[] = $line;
+                continue;
+            }
+
+            $submitted = isset($parts[1]) ? $parts[1] : $label;
+            $out[]     = trim(str_replace(array('|', "\n"), array('', ' '), $map[$label])) . '|' . $submitted;
+            $this->strings_translated++;
+        }
+
+        return implode("\n", $out);
+    }
+
+    /**
+     * A setting that is a list, one entry per line — the animated headline's
+     * rotating words. Each line is its own string, so the number of entries,
+     * which is the animation, cannot change whatever the translator does
+     * with line breaks.
+     *
+     * @return string
+     */
+    private function handle_lines($value, array &$originals, $map) {
+        $lines = explode("\n", str_replace(array("\r\n", "\r"), "\n", $value));
+
+        foreach ($lines as $i => $line) {
+            $text = trim($line);
+
+            if ($text === '' || !WIT_HTML_Translator::is_translatable($text)) {
+                continue;
+            }
+
+            if ($map === null) {
+                if (!isset($originals[$text])) {
+                    $originals[$text] = count($originals);
+                }
+                continue;
+            }
+
+            if (isset($map[$text])) {
+                $lines[$i] = trim(str_replace("\n", ' ', $map[$text]));
+                $this->strings_translated++;
+            }
+        }
+
+        return implode("\n", $lines);
+    }
+
     private function is_html($value) {
         return strpos($value, '<') !== false && (bool) preg_match('/<[a-zA-Z!\/][^>]*>/', $value);
     }

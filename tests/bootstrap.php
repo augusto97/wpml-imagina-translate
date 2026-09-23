@@ -19,6 +19,7 @@ function __($text, $domain = '')            { return $text; }
 function esc_html__($text, $domain = '')    { return $text; }
 function apply_filters($tag, $value)        { return $value; }
 function wp_json_encode($data, $flags = 0)  { return json_encode($data, $flags); }
+function did_action($hook)                  { return 0; } // Elementor never "loaded" here
 function wp_strip_all_tags($text)           { return trim(strip_tags(preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', (string) $text))); }
 // Deliberately NOT defined: wp_remote_post / wp_remote_request. Any attempt by
 // the engine to reach an API in these tests is a fatal error, not a pass.
@@ -82,6 +83,7 @@ require_once dirname(__DIR__) . '/includes/class-html-translator.php';
 require_once dirname(__DIR__) . '/includes/class-field-rules.php';
 require_once dirname(__DIR__) . '/includes/class-glossary.php';
 require_once dirname(__DIR__) . '/includes/class-translator-engine.php';
+require_once dirname(__DIR__) . '/includes/class-elementor-handler.php';
 
 // --- Tiny assertion framework -------------------------------------------
 

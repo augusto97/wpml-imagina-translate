@@ -162,6 +162,15 @@ class WIT_Field_Rules {
             return false;
         }
 
+        // Values that are never prose, whatever key holds them: switcher and
+        // boolean states, and bare e-mail addresses. A key that merely sounds
+        // like content — "tweet_button", "required" — used to let "yes" or
+        // "true" through, and the translated widget lost the setting.
+        if (in_array(strtolower($text), array('yes', 'no', 'true', 'false', 'on', 'off'), true)
+            || preg_match('/^[^\s@<>]+@[^\s@<>]+\.[a-z]{2,}$/i', $text)) {
+            return false;
+        }
+
         $normalised = strtolower((string) $key);
 
         if ($normalised !== '') {

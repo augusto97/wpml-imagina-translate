@@ -50,6 +50,7 @@ En Debian/Ubuntu: `apt-get install -y mariadb-server php-cli php-mysql curl unzi
 | `WIT_DB_USER` | el usuario actual | Usuario del sistema con el que corre MariaDB |
 | `WIT_PHP` | `php` | Binario de PHP del servidor web de pruebas, para probar otra versión |
 | `WIT_ELEMENTOR_VERSION` | `4.0.8` | Versión de Elementor que se instala; `none` para omitirlo |
+| `WIT_ELEMENTOR_PRO_ZIP` | — | Ruta a tu ZIP de Elementor Pro. Nunca se descarga; sin él, la sección J se omite |
 
 ## Qué hay dentro
 
@@ -167,6 +168,30 @@ las dos traducciones comprueba el texto traducido, los ajustes técnicos
 intactos, que Elementor carga el documento y que su renderizado muestra la
 traducción sin restos del idioma original.
 
+### Elementor Pro (opcional, local)
+
+Elementor Pro no es gratuito, así que la suite no lo descarga y CI no lo
+tiene. Con `WIT_ELEMENTOR_PRO_ZIP=/ruta/elementor-pro.zip`, `setup.sh` lo
+instala y siembra una página con siete widgets Pro: formulario, tabla de
+precios, titular animado, cuenta atrás, flip box, slides y cita.
+
+Los widgets Pro guardan valores que **parecen texto y no lo son**, y esos
+valores rompen cosas en silencio si se traducen:
+
+- las acciones al enviar un formulario (`email`, `redirect`);
+- `required` (`true`);
+- el símbolo de moneda (`euro`) y el marcador de un titular (`circle`);
+- los valores de las opciones de un select;
+- las palabras de un titular rotatorio, una por línea.
+
+La sección J lo comprueba por API y por MCP. Después **envía el formulario
+traducido por HTTP**, como un visitante, y exige que llegue el email con los
+valores originales, que redirija y que un campo obligatorio vacío se rechace.
+`fixtures/wit-mail-catcher.php` registra los emails en lugar de enviarlos.
+
+Así se encontró el peor fallo de la 1.3.0: el formulario traducido respondía
+«Gracias, te responderemos pronto» y **no enviaba nada**.
+
 ### `fixtures/reset.php`
 
 Devuelve la instalación a su estado inicial sin reconstruir WordPress. Lee los
@@ -185,6 +210,7 @@ concretos, porque la divergencia de arriba garantiza que no son los obvios.
 | **F** | MCP con un chat simulado: cadenas pedidas, guardado todo-o-nada, fidelidad, estados al día/desactualizado, correcciones, publicación, glosario, permisos por rol, y **cero llamadas a la API** |
 | **G** | MCP por HTTP con el cliente oficial: OAuth completo, herramientas, una traducción entera, y los ataques |
 | **I** | Elementor real, por API y por MCP: widgets clásicos y atómicos, ajustes técnicos intactos, render de Elementor, corrección de una frase dentro de un widget, desactualizado al editar desde Elementor |
+| **J** | Elementor Pro (si se instala): siete widgets por API y por MCP, y el formulario traducido **enviado de verdad** — email, redirección y validación |
 | **H** | El formulario de ajustes por `options.php`, incluido que enviar una key vacía **no** borre la guardada |
 
 En WordPress anterior a 6.9, F y G se sustituyen por la comprobación de que el
@@ -247,9 +273,12 @@ Conviene tenerlo claro antes de fiarse de un resultado en verde:
   la conexión desde claude.ai necesita el sitio en internet por HTTPS. Antes de
   dar por buena una versión, conviene conectarla una vez de verdad.
 
-- **Todos los widgets de Elementor.** Se prueban seis, clásicos y atómicos.
-  Los de Elementor Pro (formularios, precios, carruseles) no, porque Pro no es
-  gratuito.
+- **Todos los widgets de Elementor.** Se prueban seis de Elementor y siete de
+  Pro. El resto queda cubierto por el mismo mecanismo: el plugin pregunta a
+  Elementor el tipo de cada control, así que un widget que no se prueba aquí,
+  también de terceros, se trata igual que los que sí. Pero no se ha visto
+  funcionar uno a uno.
+- **Elementor Pro en CI.** Solo se prueba en local, con tu ZIP.
 - **WPML real.** Ver arriba.
 - **El navegador.** El JavaScript no se ejecuta: se comprueba que el marcado
   que necesita está presente, no que la interfaz funcione.
