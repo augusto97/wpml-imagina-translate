@@ -28,16 +28,26 @@ SERVER_PID=""
 cleanup() { [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null; return 0; }
 trap cleanup EXIT INT TERM
 
+# In GitHub Actions every failure also becomes an error annotation: they show
+# up on the commit and the PR, and — unlike the raw log — they are readable
+# through the REST API.
+annotate() {
+  [ "${GITHUB_ACTIONS:-}" = "true" ] || return 0
+  local msg="$2"
+  msg="${msg//'%'/'%25'}"; msg="${msg//$'\r'/'%0D'}"; msg="${msg//$'\n'/'%0A'}"
+  printf '::error title=%s::%s\n' "$1" "$msg"
+}
+SECTION=""
 ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; }
-bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=1; }
-section() { printf '\n\033[1m%s\033[0m\n' "$1"; }
+bad() { printf '  \033[31m✗\033[0m %s\n' "$1"; FAIL=1; annotate "${SECTION:-Integración}" "$1"; }
+section() { SECTION="$1"; printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 # WordPress itself cannot always reach wordpress.org from a sandbox; those
 # warnings are the environment's, not the plugin's.
 NOISE='wp_version_check|wp_update_themes|wp_update_plugins|plugins_api|wordpress\.org'
 check_log() {
   if grep -Ev "$NOISE" "$LOG" 2>/dev/null | grep -q .; then
-    bad "debug.log con entradas ($1):"
+    bad "debug.log con entradas ($1): $(grep -Ev "$NOISE" "$LOG" | head -3)"
     grep -Ev "$NOISE" "$LOG" | head -5 | sed 's/^/      /'
   else
     ok "debug.log limpio ($1)"
@@ -324,12 +334,15 @@ F_OUT=$("$WP" eval-file "$FIXTURES/mcp-plan.php" 2>/dev/null)
 printf '%s' "$F_OUT" > "$TEST_DIR/mcp-plan.json"
 
 python3 - "$TEST_DIR/mcp-plan.json" <<'CHECK' || FAIL=1
-import json, sys
+import json, os, sys
 raw = open(sys.argv[1]).read()
 try:
     d = json.loads(raw[raw.index('{'):])
 except Exception:
-    print("  \033[31m✗\033[0m mcp-plan.php no devolvió JSON:\n" + raw[:2000]); sys.exit(1)
+    print("  \033[31m✗\033[0m mcp-plan.php no devolvió JSON:\n" + raw[:2000])
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print("::error title=F. mcp-plan sin JSON::" + raw[-3000:].replace("%", "%25").replace("\n", "%0A"))
+    sys.exit(1)
 
 expect = [
     ("api_requests", 0, "ni una llamada a la API al traducir por MCP"),
@@ -392,6 +405,8 @@ for key, want, label in expect:
         print(f"  \033[32m✓\033[0m {label}")
     else:
         print(f"  \033[31m✗\033[0m {label} (={got!r}, esperaba {want!r})"); bad += 1
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::error title=F. MCP herramientas::{label} (={got!r}, esperaba {want!r})")
 cats = d.get("categories", [])
 if len(cats) == 3 and all(c.startswith("[MCP-EN] ") for c in cats):
     print("  \033[32m✓\033[0m categorías creadas con los nombres del chat")
@@ -417,14 +432,19 @@ fi
 ( cd "$CLIENT_DIR" && timeout 180 node mcp-client.mjs "$HOST" admin admin "$POST_ID" ) > "$TEST_DIR/mcp-client.json" 2>&1
 
 python3 - "$TEST_DIR/mcp-client.json" "$(wc -l < "$AILOG")" <<'CHECK' || FAIL=1
-import json, sys
+import json, os, sys
 raw = open(sys.argv[1]).read()
 try:
     d = json.loads(raw.strip().splitlines()[-1])
 except Exception:
-    print("  \033[31m✗\033[0m el cliente no devolvió JSON:\n" + raw[:2000]); sys.exit(1)
+    print("  \033[31m✗\033[0m el cliente no devolvió JSON:\n" + raw[:2000])
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print("::error title=G. cliente MCP sin JSON::" + raw[-3000:].replace("%", "%25").replace("\n", "%0A"))
+    sys.exit(1)
 if "exception" in d:
     print("  \033[31m✗\033[0m excepción en el cliente:\n      " + d["exception"][:1500].replace("\n", "\n      "))
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print("::error title=G. excepción del cliente MCP::" + d["exception"][:3000].replace("%", "%25").replace("\n", "%0A"))
 labels = [
     ("unauth_401", "sin token: 401"),
     ("www_authenticate_points_to_metadata", "el 401 apunta a los metadatos (WWW-Authenticate)"),
@@ -463,6 +483,8 @@ for key, label in labels:
         print(f"  \033[32m✓\033[0m {label}")
     else:
         print(f"  \033[31m✗\033[0m {label} (={d.get(key, '<ausente>')!r})"); bad += 1
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::error title=G. MCP HTTP::{label} (={d.get(key, '<ausente>')!r})")
 if len(d.get("tools", [])) == 11:
     print("  \033[32m✓\033[0m 11 herramientas expuestas")
 else:
