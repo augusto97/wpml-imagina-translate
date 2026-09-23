@@ -128,6 +128,68 @@ class WIT_Content_Parser {
         );
     }
 
+    /**
+     * Every string translate_content() would send for translation.
+     *
+     * The MCP planner calls this instead of translating, so the chat is asked
+     * for exactly the strings the pipeline will later look up — collected by
+     * the same functions, in the same order, with the same filters. Two
+     * separate collectors would drift, and a string the plan missed would
+     * surface as a hole in the published translation.
+     *
+     * @param string $content
+     * @return string[]
+     */
+    public function collect_strings($content) {
+        if (trim((string) $content) === '') {
+            return array();
+        }
+
+        if (has_blocks($content)) {
+            return array_keys($this->collect_block_originals(parse_blocks($content)));
+        }
+
+        $originals = array();
+        WIT_HTML_Translator::collect($content, $originals);
+
+        return array_keys($originals);
+    }
+
+    /**
+     * Rewrite content through a map of text => replacement, touching nothing
+     * else.
+     *
+     * The same machinery as a translation, pointed at an existing translation:
+     * this is how a single string is corrected without regenerating the whole
+     * post, which would overwrite whatever the reviewer had edited by hand.
+     *
+     * @param string $content
+     * @param array  $map
+     * @param int    $count Set to the number of replacements made.
+     * @return string
+     */
+    public function apply_map($content, array $map, &$count = 0) {
+        $this->strings_translated = 0;
+
+        if (trim((string) $content) === '' || empty($map)) {
+            $count = 0;
+            return (string) $content;
+        }
+
+        if (has_blocks($content)) {
+            $blocks    = parse_blocks($content);
+            $originals = $this->collect_block_originals($blocks);
+            $applied   = $this->restore_empty_objects($this->apply_blocks($blocks, $map, $originals));
+            $content   = serialize_blocks($applied);
+        } else {
+            $content = WIT_HTML_Translator::apply($content, $map, $this->strings_translated);
+        }
+
+        $count = $this->strings_translated;
+
+        return $content;
+    }
+
     // -----------------------------------------------------------------------
     // Gutenberg
     // -----------------------------------------------------------------------
@@ -146,14 +208,7 @@ class WIT_Content_Parser {
             return array('content' => $content, 'error' => null);
         }
 
-        // Pass 1a — visible text from the HTML of every block.
-        $originals = array();
-        $this->collect_html($blocks, $originals);
-
-        // Pass 1b — attributes. Runs second so that an attribute mirroring text
-        // already seen in the HTML is recognised as content regardless of its
-        // key name.
-        $this->collect_attrs($blocks, $originals);
+        $originals = $this->collect_block_originals($blocks);
 
         if (empty($originals)) {
             $this->debug_log[] = 'No se encontró texto traducible en los bloques';
@@ -171,6 +226,25 @@ class WIT_Content_Parser {
         $translated = $this->restore_empty_objects($translated);
 
         return array('content' => serialize_blocks($translated), 'error' => null);
+    }
+
+    /**
+     * Collect every translatable string of a block tree.
+     *
+     * @param array $blocks
+     * @return array text => position
+     */
+    private function collect_block_originals(array $blocks) {
+        // Pass 1a — visible text from the HTML of every block.
+        $originals = array();
+        $this->collect_html($blocks, $originals);
+
+        // Pass 1b — attributes. Runs second so that an attribute mirroring text
+        // already seen in the HTML is recognised as content regardless of its
+        // key name.
+        $this->collect_attrs($blocks, $originals);
+
+        return $originals;
     }
 
     /**

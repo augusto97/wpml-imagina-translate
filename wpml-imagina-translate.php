@@ -3,7 +3,7 @@
  * Plugin Name: WPML Imagina Translate
  * Plugin URI: https://github.com/augusto97/wpml-imagina-translate
  * Description: Traduce automáticamente contenido de WordPress usando tu propia API key de IA (OpenAI, Claude, Gemini). Integración perfecta con WPML.
- * Version: 1.2.2
+ * Version: 1.3.0
  * Author: Imagina
  * Author URI: https://github.com/augusto97
  * License: GPL v2 or later
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('WIT_VERSION', '1.2.2');
+define('WIT_VERSION', '1.3.0');
 define('WIT_PLUGIN_FILE', __FILE__);
 define('WIT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('WIT_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -101,6 +101,14 @@ class WPML_Imagina_Translate {
         require_once WIT_PLUGIN_DIR . 'includes/class-batch-processor.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-queue.php';
 
+        // Claude over MCP. Loaded everywhere, but only active on WordPress 6.9+
+        // (Abilities API) and once the site owner switches it on.
+        require_once WIT_PLUGIN_DIR . 'includes/class-translation-status.php';
+        require_once WIT_PLUGIN_DIR . 'includes/class-translation-plan.php';
+        require_once WIT_PLUGIN_DIR . 'includes/class-abilities.php';
+        require_once WIT_PLUGIN_DIR . 'includes/class-oauth.php';
+        require_once WIT_PLUGIN_DIR . 'includes/class-mcp-server.php';
+
         // Admin classes
         if (is_admin()) {
             require_once WIT_PLUGIN_DIR . 'admin/class-translation-dashboard.php';
@@ -138,6 +146,14 @@ class WPML_Imagina_Translate {
         // Registers the cron handler; must run on every request, not only in
         // the admin, because WP-Cron fires on front-end requests.
         WIT_Queue::instance();
+
+        if (WIT_Abilities::is_supported()) {
+            // The abilities are registered whether or not MCP is switched on:
+            // they are also reachable through WordPress's own Abilities API.
+            WIT_Abilities::instance();
+            WIT_OAuth::instance();
+            WIT_MCP_Server::instance();
+        }
 
         $this->maybe_upgrade();
 
@@ -190,6 +206,10 @@ class WPML_Imagina_Translate {
         dbDelta($logs);
         dbDelta(WIT_Translation_Memory::schema());
         dbDelta(WIT_Queue::schema());
+
+        foreach (WIT_OAuth::schema() as $table) {
+            dbDelta($table);
+        }
     }
 
     /**
@@ -222,6 +242,7 @@ class WPML_Imagina_Translate {
             'meta_fields_list' => '_yoast_wpseo_title,_yoast_wpseo_metadesc,_excerpt',
             'batch_size' => 5,
             'enable_translation_memory' => false,
+            'mcp_enabled' => false,
         );
 
         // autoload = false: the option stores API keys and has no business

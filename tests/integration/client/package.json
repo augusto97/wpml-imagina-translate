@@ -1,0 +1,9 @@
+{
+  "name": "wit-mcp-client-test",
+  "private": true,
+  "type": "module",
+  "description": "Drives the plugin's MCP endpoint with the official MCP SDK client, including the full OAuth flow.",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0"
+  }
+}

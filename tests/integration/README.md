@@ -34,6 +34,7 @@ al terminar.
 - Un servidor MariaDB o MySQL instalado (no hace falta que esté arrancado;
   `setup.sh` levanta su propia instancia con su propio *datadir*)
 - `curl`, `unzip`, `git`, `python3`
+- Node 18+ y npm, para el cliente MCP de la sección G (`run.sh` ejecuta `npm ci` en `client/` si hace falta)
 
 En Debian/Ubuntu: `apt-get install -y mariadb-server php-cli php-mysql curl unzip git`
 
@@ -42,7 +43,7 @@ En Debian/Ubuntu: `apt-get install -y mariadb-server php-cli php-mysql curl unzi
 | Variable | Por defecto | Para qué |
 |---|---|---|
 | `WIT_TEST_DIR` | `$TMPDIR/wit-integration` | Dónde vive la instalación |
-| `WIT_WP_VERSION` | `6.8.2` | Versión de WordPress |
+| `WIT_WP_VERSION` | `7.1.2` | Versión de WordPress. Con una anterior a 6.9, las secciones de MCP comprueban que la función se apaga limpia |
 | `WIT_WP_PORT` | `8080` | Puerto del servidor de pruebas |
 | `WIT_DB_PORT` | `3307` | Puerto de MariaDB (no choca con el 3306 del sistema) |
 | `WIT_DB_SOCKET` | `/tmp/wit-mysql.sock` | Socket de MariaDB — **ver la nota de abajo** |
@@ -113,6 +114,34 @@ produce, y `run.sh` lo comprueba otra vez antes de dar por bueno el test — un
 fixture que dejara de reproducir el escenario convertiría la prueba en un test
 vacío que siempre pasa.
 
+### `fixtures/mcp-plan.php` — el camino MCP, con un chat simulado
+
+Conduce las herramientas MCP (las *abilities* de WordPress) como lo haría
+Claude, con un "chat" que traduce anteponiendo `[MCP-EN]`. Lo que se prueba es
+todo lo que rodea al chat: qué cadenas se le piden, que no se escriba nada
+hasta que un contenido está completo, que re-traducir solo pida lo que cambió,
+correcciones, publicación, glosario y permisos por rol.
+
+Y por encima de todo: **que el proveedor falso no reciba ni una petición**. El
+camino MCP existe para no gastar la API; una sola llamada es un fallo.
+
+### `client/mcp-client.mjs` — el cliente MCP oficial
+
+Usa el SDK oficial de MCP (`@modelcontextprotocol/sdk`) para hacer lo que hace
+Claude cuando un usuario añade el conector: descubre el servidor OAuth desde el
+401, se registra (DCR), manda al usuario a la pantalla de consentimiento —la
+aprobación la simula una sesión de WordPress—, canjea el código con PKCE,
+lista las herramientas y traduce un contenido entero por HTTP.
+
+Después ataca la conexión: el token contra otras rutas de la API REST, un
+`Origin` ajeno, un redirect malicioso al registrarse, un verificador PKCE
+incorrecto, la reutilización de un refresh token ya rotado y la revocación.
+
+Es la prueba más cercana a Claude real que se puede hacer sin publicar el
+sitio en internet. No la sustituye: Claude tiene sus propias particularidades,
+documentadas en `claude.com/docs/connectors/building/authentication`, y la
+implementación las sigue, pero solo una conexión real las confirma.
+
 ### `fixtures/reset.php`
 
 Devuelve la instalación a su estado inicial sin reconstruir WordPress. Lee los
@@ -128,7 +157,13 @@ concretos, porque la divergencia de arriba garantiza que no son los obvios.
 | **C** | La cola drenando **sin usuario actual**, como la ejecuta WP-Cron |
 | **D** | Las cinco pantallas de administración por HTTP real, más la redirección de la URL antigua |
 | **E** | Los ocho endpoints AJAX, más los tres casos que **deben** rechazarse: nonce inválido, idioma inexistente, sin sesión |
-| **F** | El formulario de ajustes por `options.php`, incluido que enviar una key vacía **no** borre la guardada |
+| **F** | MCP con un chat simulado: cadenas pedidas, guardado todo-o-nada, fidelidad, estados al día/desactualizado, correcciones, publicación, glosario, permisos por rol, y **cero llamadas a la API** |
+| **G** | MCP por HTTP con el cliente oficial: OAuth completo, herramientas, una traducción entera, y los ataques |
+| **H** | El formulario de ajustes por `options.php`, incluido que enviar una key vacía **no** borre la guardada |
+
+En WordPress anterior a 6.9, F y G se sustituyen por la comprobación de que el
+endpoint MCP no existe y de que Ajustes explica el requisito. CI ejecuta la
+suite en las dos situaciones.
 
 Tras cada sección se comprueba que `debug.log` esté vacío. Un *warning* de PHP
 que nadie mira es un fallo que todavía no ha dado la cara.
@@ -163,11 +198,16 @@ dentro de su propio objeto `witAdmin`; coger el primero que aparece devuelve el
 de WordPress y todos los endpoints responden *"Error de seguridad"*.
 
 **`pkill -f <patrón>` se mata a sí mismo** si el patrón aparece en la línea de
-comandos de quien lo lanza. Mata por PID.
+comandos de quien lo lanza. Ancla el patrón al inicio (`^php -S …`) o mata por
+PID. `run.sh` lo ancla.
 
 ## Qué NO cubre
 
 Conviene tenerlo claro antes de fiarse de un resultado en verde:
+
+- **Claude real.** El cliente oficial de MCP recorre el mismo protocolo, pero
+  la conexión desde claude.ai necesita el sitio en internet por HTTPS. Antes de
+  dar por buena una versión, conviene conectarla una vez de verdad.
 
 - **Elementor.** El manejador tiene lógica sustancial (widgets clásicos y
   *atomic* 4.x, `Document::save()`, cachés de render) y aquí no se toca nada.

@@ -15,6 +15,7 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 - **Memoria de traducción**: no vuelve a pagar por una frase ya traducida, y garantiza que se traduzca igual en todo el sitio
 - **Glosario**: términos de marca que nunca se traducen y traducciones fijas por idioma
 - **Cola en segundo plano**: encolas cientos de páginas y cierras el navegador; el servidor sigue
+- **Traducir desde Claude (MCP)**: conecta tu suscripción de Claude y pide desde el chat qué falta, traduce, revisa, corrige y publica — sin gastar la API key
 - **Smart Content Parser**: Preserva bloques de Gutenberg, HTML, y estructura
 - **Meta Fields**: Traduce automáticamente SEO (Yoast, RankMath), excerpts, y campos personalizados
 - **Dashboard Intuitivo**: Interfaz simple para gestionar traducciones
@@ -177,6 +178,89 @@ Número de posts a procesar en cada lote. Recomendado: 5-10
 1. Ve a **IA Translate → Logs**
 2. Revisa el historial completo de traducciones
 3. Identifica errores y posts traducidos exitosamente
+
+## 💬 Traducir desde Claude (MCP)
+
+Si ya pagas una suscripción de Claude, puedes hacer el trabajo de traducción
+desde su chat en lugar de pagar tokens de API. El plugin se conecta a Claude
+como un *conector* (MCP) y Claude traduce con tu suscripción.
+
+**Los dos caminos están separados del todo.** Lo que haces desde Claude nunca
+llama a la API key del sitio, ni para una sola cadena. Lo que haces desde el
+dashboard del plugin nunca pasa por Claude. No hay gasto duplicado.
+
+### Qué puedes pedir
+
+> «¿Qué me falta por traducir al inglés?»
+> «Tradúceme la página de Servicios al francés.»
+> «Enséñame la traducción inglesa de Contacto; cambia *Get in touch* por *Contact us*.»
+> «¿Qué páginas quedaron desactualizadas desde que cambié el español?»
+> «Añade *Imagina* al glosario como marca.»
+> «Publica la traducción inglesa de Servicios.»
+
+Claude ve el estado de cada contenido en cada idioma:
+
+- **Al día**: traducido, y el original no ha cambiado desde entonces.
+- **Desactualizado**: el original cambió después de traducirlo.
+- **Pendiente**: sin traducir.
+- **Desconocido**: existe una traducción hecha fuera del plugin.
+
+Las traducciones se guardan **como borrador**. Solo se publican si lo pides.
+
+### Requisitos
+
+- WordPress **6.9 o superior**. El resto del plugin funciona en versiones anteriores; solo esta función necesita 6.9.
+- El sitio accesible desde internet por **HTTPS**: Claude se conecta desde sus servidores, no desde tu ordenador.
+- Enlaces permanentes distintos de «Simple».
+- Cualquier plan de Claude con conectores personalizados (Free está limitado a uno).
+
+### Conectar
+
+1. En WordPress: **IA Translate → Ajustes → Conexión con Claude (MCP)**, marca **Permitir que Claude se conecte** y guarda.
+2. Copia la **URL del conector** que aparece.
+3. En Claude: **Personalizar → Conectores → Añadir conector personalizado**, pega la URL y pulsa **Añadir**.
+4. Pulsa **Conectar**. Se abre tu WordPress: inicia sesión si hace falta y pulsa **Permitir**.
+
+Claude actúa con los permisos de la cuenta con la que apruebas. Si la apruebas
+con un **Editor**, Claude puede traducir y publicar pero no puede tocar el
+glosario ni nada reservado a administradores. Las conexiones activas aparecen
+en los ajustes, cada una con su botón **Revocar**.
+
+**Claude nunca ve ni cambia las API keys** ni ningún otro ajuste del plugin.
+
+### Consumo
+
+Traducir por el chat no cuesta tokens de API, pero sí consume uso de tu
+suscripción. Por eso:
+
+- Cada tanda tiene **como máximo 10 contenidos**.
+- Antes de un trabajo grande, Claude te dice cuántos contenidos son y cuánto texto tienen, y **tú decides** si seguir y cómo.
+- Solo se manda al chat lo que hace falta de verdad. Lo que ya está en la memoria de traducción o lo resuelve el glosario no se envía.
+
+Para cientos de páginas de una vez, la cola en segundo plano con API sigue
+siendo la herramienta adecuada.
+
+### Cómo funciona por dentro
+
+Claude **nunca toca el marcado**. Recibe cadenas de texto plano con un
+identificador y devuelve sus traducciones. El plugin las aplica con el mismo
+motor del camino por API, que ya reconstruye bloques, Elementor, entidades y
+atributos sin romperlos.
+
+Un contenido solo se escribe cuando han llegado **todas** sus cadenas. Si
+falta alguna, lo recibido se conserva y Claude envía solo lo que falta. Una
+página nunca queda a medio traducir.
+
+La conexión usa OAuth 2.0 con registro dinámico de clientes y PKCE, como exige
+Claude. Los tokens se guardan cifrados con hash y solo sirven para el endpoint
+MCP, nunca para el resto de la API REST ni para `wp-admin`.
+
+### Si no conecta
+
+- **«Couldn't reach the MCP server»**: el sitio no es accesible desde internet, o un firewall bloquea el rango de Anthropic (`160.79.104.0/21`).
+- **Un plugin de seguridad cierra la API REST** a usuarios anónimos: permite las rutas `/wp-json/wit/v1/`.
+- **Apache no deja pasar la cabecera `Authorization`**: comprueba que el `.htaccess` de WordPress contiene `RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]` (WordPress la incluye por defecto).
+- **WordPress en una subcarpeta**: funciona, porque el descubrimiento OAuth se sirve también dentro de la propia API REST.
 
 ## 🏗️ Arquitectura Técnica
 

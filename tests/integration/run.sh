@@ -47,6 +47,11 @@ check_log() {
 
 CURL=(curl -s --max-time 60)
 
+# The MCP sections need the Abilities API (WordPress 6.9+). On older versions
+# they are replaced by a check that the plugin degrades cleanly, rather than
+# silently skipped.
+HAS_ABILITIES=$("$WP" eval 'echo function_exists("wp_register_ability") ? "1" : "0";')
+
 # Ids shift whenever the fixture changes; read them instead of assuming.
 POST_ID=$("$WP" eval 'echo get_option("wit_test_fixture")["post"];')
 PAGE_ID=$("$WP" eval 'echo get_option("wit_test_fixture")["page"];')
@@ -197,9 +202,10 @@ check_log "cola"
 # =============================================================================
 section "D. Pantallas de administración por HTTP real"
 # =============================================================================
-# Kill a server left behind by an interrupted run. Matched by pattern, but this
-# script's own command line does not contain it, so it cannot kill itself.
-for pid in $(pgrep -f "php -S 127.0.0.1:$WP_PORT" 2>/dev/null); do
+# Kill a server left behind by an interrupted run. Anchored to the start of
+# the command line: an unanchored pattern also matches any shell whose own
+# command line merely mentions it — including the one that launched this.
+for pid in $(pgrep -f "^php -S 127.0.0.1:$WP_PORT" 2>/dev/null); do
   kill "$pid" 2>/dev/null
 done
 sleep 0.5
@@ -297,7 +303,185 @@ reject "sin sesión"                    -d "action=wit_translate_post" -d "nonce
 check_log "ajax"
 
 # =============================================================================
-section "F. Guardado de ajustes por el formulario real"
+section "F. Traducir por MCP: las herramientas, con un chat simulado"
+# =============================================================================
+if [ "$HAS_ABILITIES" != "1" ]; then
+  echo "  (WordPress $("$WP" core version) no tiene la Abilities API: se comprueba que MCP se desactiva limpio)"
+  "$WP" eval '$s = get_option("wit_settings"); $s["mcp_enabled"] = true; update_option("wit_settings", $s, false);' >/dev/null
+  code=$("${CURL[@]}" -o /dev/null -w '%{http_code}' -X POST "$HOST/wp-json/wit/v1/mcp" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"ping"}')
+  [ "$code" = "404" ] && ok "sin Abilities API, el endpoint MCP no existe (404) aunque esté activado" || bad "endpoint MCP respondió $code en WordPress sin Abilities API"
+  notice=$("${CURL[@]}" -b "$JAR" "$HOST/wp-admin/admin.php?page=wpml-imagina-translate-settings")
+  printf '%s' "$notice" | grep -q "Requiere WordPress 6.9" && ok "Ajustes explica que hace falta WordPress 6.9" || bad "Ajustes no avisa del requisito de WordPress 6.9"
+  "$WP" eval '$s = get_option("wit_settings"); $s["mcp_enabled"] = false; update_option("wit_settings", $s, false);' >/dev/null
+  check_log "sin abilities"
+else
+# The chat is simulated ([MCP-EN] prefix). What is under test is everything
+# around it — and above all that the API is never called.
+"$WP" eval-file "$FIXTURES/reset.php" >/dev/null
+: > "$LOG"; : > "$AILOG"
+
+F_OUT=$("$WP" eval-file "$FIXTURES/mcp-plan.php" 2>/dev/null)
+printf '%s' "$F_OUT" > "$TEST_DIR/mcp-plan.json"
+
+python3 - "$TEST_DIR/mcp-plan.json" <<'CHECK' || FAIL=1
+import json, sys
+raw = open(sys.argv[1]).read()
+try:
+    d = json.loads(raw[raw.index('{'):])
+except Exception:
+    print("  \033[31m✗\033[0m mcp-plan.php no devolvió JSON:\n" + raw[:2000]); sys.exit(1)
+
+expect = [
+    ("api_requests", 0, "ni una llamada a la API al traducir por MCP"),
+    ("api_requests_final", 0, "ni una llamada a la API en todo el escenario"),
+    ("abilities_registered", True, "las 11 abilities están registradas"),
+    ("rejects_11_posts", True, "más de 10 contenidos por tanda se rechaza"),
+    ("has_title", True, "prepare incluye el título"),
+    ("has_meta", True, "prepare incluye los campos SEO"),
+    ("has_terms", True, "prepare incluye los términos que faltan"),
+    ("glossary_excluded", True, "lo que resuelve el glosario no se manda al chat"),
+    ("shortcode_excluded", True, "los shortcodes no se mandan al chat"),
+    ("no_html_sent", True, "al chat solo llega texto plano, nunca HTML"),
+    ("dedup_across_posts", True, "una cadena compartida entre posts se manda una vez"),
+    ("instructions", True, "las instrucciones nombran el idioma en inglés"),
+    ("glossary_guidance", True, "prepare adjunta las reglas del glosario"),
+    ("partial_is_incomplete", True, "guardar a medias queda como incompleto"),
+    ("partial_wrote_nothing", True, "guardar a medias no escribe nada"),
+    ("partial_lists_missing", True, "guardar a medias dice qué falta"),
+    ("saved_post", "created", "completar lo pendiente crea la traducción del post"),
+    ("saved_page", "created", "y la de la página, en la misma tanda"),
+    ("no_divergence", True, "plan y pipeline piden exactamente las mismas cadenas"),
+    ("title", "[MCP-EN] Servicios de Imagina", "título traducido por el chat"),
+    ("is_draft", True, "se crea como borrador"),
+    ("glossary_fix", True, "la regla fija del glosario se aplica"),
+    ("shortcode", True, "shortcode intacto"),
+    ("entities", True, "entidades HTML intactas"),
+    ("attributes", True, "clases y URLs intactas"),
+    ("alt_both", True, "alt traducido en markup y en el JSON del bloque"),
+    ("blocks_valid", True, "10 bloques Gutenberg válidos"),
+    ("meta", "[MCP-EN] Servicios | Imagina", "campo SEO traducido por el chat"),
+    ("custom_meta", True, "campos personalizados copiados"),
+    ("tax_roundtrip", True, "taxonomía enlazada al término correcto"),
+    ("history_via_mcp", True, "el historial lo marca como vía Claude (MCP)"),
+    ("status_current", "current", "estado: al día"),
+    ("status_outdated", "outdated", "editar el original la deja desactualizada"),
+    ("list_outdated", True, "list_posts la muestra como desactualizada"),
+    ("retranslate_only_new", True, "re-traducir pide solo la cadena que cambió"),
+    ("retranslate_updates_same", True, "y actualiza la misma traducción"),
+    ("status_current_again", "current", "vuelve a estar al día"),
+    ("correct_ok", True, "corregir una frase"),
+    ("correct_applied", True, "la corrección se aplica"),
+    ("correct_rest_kept", True, "el resto de la traducción no se toca"),
+    ("correct_memory", True, "la corrección actualiza la memoria"),
+    ("correct_rejects_unknown", True, "corregir un texto inexistente da error"),
+    ("correct_no_script", True, "una corrección no puede colar <script>"),
+    ("published", True, "publicar"),
+    ("publish_kept_blocks", True, "publicar no destruye el marcado"),
+    ("glossary_add", True, "añadir regla al glosario"),
+    ("glossary_remove", True, "quitar regla del glosario"),
+    ("glossary_key_kept", True, "editar el glosario no toca las API keys"),
+    ("glossary_rejects_bad", True, "una regla mal formada se rechaza"),
+    ("subscriber_denied", True, "un suscriptor no puede usar las herramientas"),
+    ("editor_can_read", True, "un editor puede consultar"),
+    ("editor_no_glossary_edit", True, "un editor no puede editar el glosario"),
+]
+bad = 0
+for key, want, label in expect:
+    got = d.get(key, "<ausente>")
+    if got == want:
+        print(f"  \033[32m✓\033[0m {label}")
+    else:
+        print(f"  \033[31m✗\033[0m {label} (={got!r}, esperaba {want!r})"); bad += 1
+cats = d.get("categories", [])
+if len(cats) == 3 and all(c.startswith("[MCP-EN] ") for c in cats):
+    print("  \033[32m✓\033[0m categorías creadas con los nombres del chat")
+else:
+    print(f"  \033[31m✗\033[0m categorías: {cats}"); bad += 1
+sys.exit(1 if bad else 0)
+CHECK
+check_log "mcp herramientas"
+
+# =============================================================================
+section "G. Conectar por MCP con el cliente oficial, OAuth incluido"
+# =============================================================================
+# The official MCP SDK client runs the flow Claude runs, then attacks it.
+"$WP" eval-file "$FIXTURES/reset.php" >/dev/null
+"$WP" eval '$s = get_option("wit_settings"); $s["mcp_enabled"] = true; update_option("wit_settings", $s, false);' >/dev/null
+: > "$LOG"; : > "$AILOG"
+
+CLIENT_DIR="$PLUGIN_DIR/tests/integration/client"
+if [ ! -d "$CLIENT_DIR/node_modules/@modelcontextprotocol/sdk" ]; then
+  ( cd "$CLIENT_DIR" && npm ci --no-audit --no-fund --silent ) || bad "npm ci falló"
+fi
+
+( cd "$CLIENT_DIR" && timeout 180 node mcp-client.mjs "$HOST" admin admin "$POST_ID" ) > "$TEST_DIR/mcp-client.json" 2>&1
+
+python3 - "$TEST_DIR/mcp-client.json" "$(wc -l < "$AILOG")" <<'CHECK' || FAIL=1
+import json, sys
+raw = open(sys.argv[1]).read()
+try:
+    d = json.loads(raw.strip().splitlines()[-1])
+except Exception:
+    print("  \033[31m✗\033[0m el cliente no devolvió JSON:\n" + raw[:2000]); sys.exit(1)
+if "exception" in d:
+    print("  \033[31m✗\033[0m excepción en el cliente:\n      " + d["exception"][:1500].replace("\n", "\n      "))
+labels = [
+    ("unauth_401", "sin token: 401"),
+    ("www_authenticate_points_to_metadata", "el 401 apunta a los metadatos (WWW-Authenticate)"),
+    ("prm_resource_matches", "los metadatos del recurso coinciden con la URL"),
+    ("root_as_metadata", "metadatos del servidor OAuth en /.well-known"),
+    ("oidc_has_required_fields", "el documento OpenID pasa la validación estricta"),
+    ("first_connect_requires_auth", "el SDK detecta que hace falta autenticarse"),
+    ("dcr_registered", "registro dinámico del cliente (DCR)"),
+    ("authorize_url_has_pkce", "la autorización lleva PKCE S256"),
+    ("consent_page_shows_host", "la pantalla de consentimiento muestra el destino"),
+    ("consent_redirects_with_code", "aprobar devuelve el código"),
+    ("consent_returns_iss", "y el parámetro iss (RFC 9207)"),
+    ("tokens_issued", "canje de código por tokens"),
+    ("connected", "conexión MCP establecida"),
+    ("instructions_mention_subscription", "las instrucciones explican que se usa la suscripción"),
+    ("tools_have_annotations", "las herramientas llevan anotaciones"),
+    ("tool_names_valid", "nombres de herramienta válidos para MCP"),
+    ("limit_is_tool_error", "más de 10 posts: error de herramienta, no de protocolo"),
+    ("unknown_post_is_tool_error", "post inexistente: error de herramienta"),
+    ("token_rejected_elsewhere", "el token NO sirve para el resto de la API REST"),
+    ("foreign_origin_403", "Origin ajeno: 403"),
+    ("evil_redirect_rejected", "registrar un redirect ajeno se rechaza"),
+    ("wrong_verifier_invalid_grant", "PKCE incorrecto: invalid_grant"),
+    ("code_burned_after_failure", "y el código queda quemado"),
+    ("deny_returns_access_denied", "cancelar devuelve access_denied"),
+    ("refresh_rotates", "el refresh token rota"),
+    ("old_access_superseded", "el access token anterior deja de valer"),
+    ("new_access_works", "el nuevo funciona"),
+    ("refresh_reuse_invalid_grant", "reutilizar un refresh token: invalid_grant"),
+    ("reuse_revokes_connection", "y la conexión entera se revoca"),
+    ("refresh_after_revocation_fails", "tras revocar, no se puede refrescar"),
+]
+bad = 0
+for key, label in labels:
+    if d.get(key) is True:
+        print(f"  \033[32m✓\033[0m {label}")
+    else:
+        print(f"  \033[31m✗\033[0m {label} (={d.get(key, '<ausente>')!r})"); bad += 1
+if len(d.get("tools", [])) == 11:
+    print("  \033[32m✓\033[0m 11 herramientas expuestas")
+else:
+    print(f"  \033[31m✗\033[0m herramientas: {d.get('tools')}"); bad += 1
+if d.get("saved_status") == "created" and d.get("prepared_strings", 0) > 0:
+    print(f"  \033[32m✓\033[0m traducción completa por HTTP ({d.get('prepared_strings')} cadenas)")
+else:
+    print(f"  \033[31m✗\033[0m traducción por HTTP: {d.get('saved_status')} / {d.get('prepared_strings')}"); bad += 1
+if sys.argv[2].strip() == "0":
+    print("  \033[32m✓\033[0m ni una llamada a la API")
+else:
+    print(f"  \033[31m✗\033[0m {sys.argv[2].strip()} llamadas a la API"); bad += 1
+sys.exit(1 if bad else 0)
+CHECK
+check_log "mcp http"
+fi
+
+# =============================================================================
+section "H. Guardado de ajustes por el formulario real"
 # =============================================================================
 : > "$LOG"
 SNONCE=$(grep -o 'name="_wpnonce" value="[a-f0-9]*"' "$TEST_DIR/page-Ajustes.html" | head -1 | cut -d'"' -f4)

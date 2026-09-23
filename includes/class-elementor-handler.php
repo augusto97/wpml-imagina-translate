@@ -195,6 +195,54 @@ class WIT_Elementor_Handler {
         return $this->result(null);
     }
 
+    /**
+     * Every string translate() would send for translation.
+     *
+     * Same collector as translate(), so an MCP plan asks the chat for exactly
+     * what the pipeline will look up.
+     *
+     * @param int $post_id
+     * @return string[]
+     */
+    public function collect_strings($post_id) {
+        $elements = $this->read_elements($post_id);
+
+        if ($elements === null) {
+            return array();
+        }
+
+        $originals = array();
+        $this->collect_elements($elements, $originals);
+
+        return array_keys($originals);
+    }
+
+    /**
+     * Rewrite a post's Elementor data through a map, touching nothing else.
+     *
+     * Used to correct one string in an existing translation.
+     *
+     * @param int   $post_id
+     * @param array $map text => replacement
+     * @return int Replacements made; 0 means nothing was written.
+     */
+    public function apply_map_to_post($post_id, array $map) {
+        $elements = $this->read_elements($post_id);
+
+        if ($elements === null || empty($map)) {
+            return 0;
+        }
+
+        $this->strings_translated = 0;
+        $applied = $this->apply_elements($elements, $map);
+
+        if ($this->strings_translated > 0) {
+            $this->write($post_id, $applied);
+        }
+
+        return $this->strings_translated;
+    }
+
     // -----------------------------------------------------------------------
     // Reading and writing
     // -----------------------------------------------------------------------

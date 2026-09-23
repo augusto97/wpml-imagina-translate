@@ -19,6 +19,9 @@ function __($text, $domain = '')            { return $text; }
 function esc_html__($text, $domain = '')    { return $text; }
 function apply_filters($tag, $value)        { return $value; }
 function wp_json_encode($data, $flags = 0)  { return json_encode($data, $flags); }
+function wp_strip_all_tags($text)           { return trim(strip_tags(preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', (string) $text))); }
+// Deliberately NOT defined: wp_remote_post / wp_remote_request. Any attempt by
+// the engine to reach an API in these tests is a fatal error, not a pass.
 
 /**
  * Minimal settings stub. Translation memory is switched off so no database is
@@ -69,6 +72,7 @@ class WIT_Translation_Memory {
 
     public function is_enabled()                                    { return false; }
     public function get_many(array $t, $s, $g)                      { return array(); }
+    public function peek_many(array $t, $s, $g)                     { return array(); }
     public function store_many(array $p, $s, $g, $pr = '', $m = '') { return 0; }
 }
 

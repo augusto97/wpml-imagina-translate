@@ -174,3 +174,51 @@ WIT_Tests::same('Dos', $parsed[2], 'sin terminador funciona igual que antes');
 
 $parsed = $parse("[[[1]]]\nUno\n[[[2]]]\n**[[[END]]]** ya está", 2);
 WIT_Tests::ok(!isset($parsed[2]), 'terminador en mayúsculas y con markdown también corta');
+
+WIT_Tests::group('Modo MCP — la traducción llega del chat, nunca de la API');
+
+// No HTTP function exists in this environment: if the engine tried to call a
+// provider, this group would die with a fatal error instead of passing.
+$map = array(
+    'Hola mundo'     => 'Hello world',
+    'Plain source'   => 'Clean <script>alert(1)</script>text',
+    '<b>Rich</b> x'  => '<b>Rico</b> x',
+);
+
+$result = WIT_Translator_Engine::with_external_translations($map, function () {
+    $engine = new WIT_Translator_Engine();
+    return array(
+        'batch'  => $engine->translate_batch(array('Hola mundo', 'Sin traducción', 'Plain source', '<b>Rich</b> x'), 'en', 'es'),
+        'single' => $engine->translate('Hola mundo', 'en', 'es'),
+        'active' => WIT_Translator_Engine::is_external_active(),
+    );
+});
+
+WIT_Tests::same('Hello world', $result['batch'][0]['translation'], 'la cadena se toma del mapa del chat');
+WIT_Tests::ok(!empty($result['batch'][1]['error']), 'una cadena que el chat no envió falla, no cae a la API');
+WIT_Tests::same(array('Sin traducción'), WIT_Translator_Engine::external_missing(), 'y queda registrada como ausente');
+WIT_Tests::same('Clean text', $result['batch'][2]['translation'], 'origen en texto plano: se eliminan las etiquetas que traiga el chat');
+WIT_Tests::same('<b>Rico</b> x', $result['batch'][3]['translation'], 'origen con marcado: el marcado se respeta');
+WIT_Tests::same('Hello world', $result['single']['translation'], 'translate() de una sola cadena también usa el mapa');
+WIT_Tests::ok($result['active'], 'dentro del bloque el modo externo está activo');
+WIT_Tests::ok(!WIT_Translator_Engine::is_external_active(), 'al salir del bloque se desactiva');
+
+$nested = false;
+try {
+    WIT_Translator_Engine::with_external_translations(array(), function () {
+        WIT_Translator_Engine::with_external_translations(array(), function () {});
+    });
+} catch (LogicException $e) {
+    $nested = true;
+}
+WIT_Tests::ok($nested, 'anidar dos mapas externos se rechaza (sería ambiguo cuál aplica)');
+WIT_Tests::ok(!WIT_Translator_Engine::is_external_active(), 'y una excepción dentro no deja el modo externo pegado');
+
+WIT_Settings::$overrides = array('glossary' => "Imagina\nContacta = Get in touch");
+$after = new WIT_Translator_Engine();
+WIT_Tests::same(
+    array('Hola'),
+    $after->unresolved(array('Imagina', 'Contacta', 'Hola'), 'en', 'es'),
+    'unresolved() excluye lo que el glosario resuelve entero'
+);
+WIT_Settings::$overrides = array();

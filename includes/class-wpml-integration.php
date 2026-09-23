@@ -73,15 +73,24 @@ class WIT_WPML_Integration {
         }
 
         $default = $this->get_default_language();
+        $engine  = new WIT_Translator_Engine();
         $out     = array();
 
         foreach ($languages as $code => $language) {
             $code = isset($language['code']) ? $language['code'] : $code;
 
+            // wpml_active_languages has no English name — only native_name and
+            // translated_name, the latter in the admin's display language
+            // ("Inglés" for a Spanish admin). The engine's table gives the
+            // English one that instructions to a model need.
+            $english = $engine->get_language_name($code);
+
             $out[] = array(
                 'code'         => $code,
                 'name'         => isset($language['native_name']) ? $language['native_name'] : $code,
-                'english_name' => isset($language['english_name']) ? $language['english_name'] : $code,
+                'english_name' => ($english !== '' && $english !== $code)
+                    ? $english
+                    : (isset($language['translated_name']) ? $language['translated_name'] : $code),
                 'default'      => ($code === $default),
             );
         }
@@ -184,9 +193,10 @@ class WIT_WPML_Integration {
      * @param string[] $post_types
      * @param bool     $only_pending Exclude posts that already have a translation.
      * @param int      $limit
+     * @param string   $search       Optional text to search for.
      * @return array[]
      */
-    public function get_pending_translations($target_language, $post_types = array('post', 'page'), $only_pending = false, $limit = 100) {
+    public function get_pending_translations($target_language, $post_types = array('post', 'page'), $only_pending = false, $limit = 100, $search = '') {
         if (empty($target_language) || !$this->is_active_language($target_language)) {
             return array();
         }
@@ -216,6 +226,7 @@ class WIT_WPML_Integration {
             'update_post_term_cache' => false,
             'suppress_filters'       => false,
             'lang'                   => $default_language,
+            's'                      => (string) $search,
         ));
 
         $posts = array();
@@ -385,7 +396,10 @@ class WIT_WPML_Integration {
         );
         // _elementor_* is WIT_Elementor_Handler's: it translates the data,
         // copies the settings keys and clears the render caches itself.
-        $skip_prefix = array('_elementor_', '_icl_', '_wpml_', '_wp_trash_meta_', '_oembed_');
+        // _wit_ is this plugin's bookkeeping about a translation (the source
+        // fingerprint used to detect outdated translations); copying it from
+        // the source would make a fresh translation look like a stale one.
+        $skip_prefix = array('_elementor_', '_icl_', '_wpml_', '_wit_', '_wp_trash_meta_', '_oembed_');
 
         $copied = 0;
 
@@ -560,6 +574,66 @@ class WIT_WPML_Integration {
      * @param int    $translated_post_id
      * @param string $target_language
      */
+    /**
+     * Names and descriptions of the terms a translation would have to create.
+     *
+     * Walks exactly what copy_taxonomies() and create_translated_term() walk —
+     * every term of every taxonomy on the post that has no translation yet,
+     * plus any untranslated ancestors, since a child is created under its
+     * translated parent — so an MCP plan asks for every string the term step
+     * will look up. Anything missed here would reach the external map as a
+     * gap, and the term would keep its source-language name.
+     *
+     * @param int    $source_post_id
+     * @param string $target_language
+     * @return string[]
+     */
+    public function collect_missing_term_strings($source_post_id, $target_language) {
+        $strings = array();
+        $seen    = array();
+
+        foreach (get_object_taxonomies(get_post_type($source_post_id)) as $taxonomy) {
+            $terms = wp_get_object_terms($source_post_id, $taxonomy, array('fields' => 'ids'));
+
+            if (is_wp_error($terms) || empty($terms)) {
+                continue;
+            }
+
+            foreach ($terms as $term_id) {
+                // Climb to the root, stopping at the first ancestor that is
+                // already translated — create_translated_term() does the same.
+                $current = (int) $term_id;
+
+                while ($current && !isset($seen[$taxonomy . ':' . $current])) {
+                    $seen[$taxonomy . ':' . $current] = true;
+
+                    if (apply_filters('wpml_object_id', $current, $taxonomy, false, $target_language)) {
+                        break;
+                    }
+
+                    $term = get_term($current, $taxonomy);
+
+                    if (!$term || is_wp_error($term)) {
+                        break;
+                    }
+
+                    if (!apply_filters('wit_create_missing_terms', true, $term, $target_language)) {
+                        break;
+                    }
+
+                    $strings[] = $term->name;
+                    if ($term->description !== '') {
+                        $strings[] = $term->description;
+                    }
+
+                    $current = (int) $term->parent;
+                }
+            }
+        }
+
+        return array_values(array_unique($strings));
+    }
+
     private function copy_taxonomies($source_post_id, $translated_post_id, $target_language, $source_language = '') {
         $taxonomies = get_object_taxonomies(get_post_type($source_post_id));
 

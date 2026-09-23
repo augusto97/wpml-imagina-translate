@@ -46,3 +46,6 @@ debug.log
 
 # Artefacto de tools/build-zip.sh
 /dist/
+
+# Dependencias del cliente MCP de pruebas
+tests/integration/client/node_modules/

@@ -60,13 +60,21 @@ jobs:
 
   integration:
     # The suite that found the defects unit tests could not: real WordPress,
-    # real database, real HTTP.
-    name: Integración
+    # real database, real HTTP. Run on the current WordPress, where the MCP
+    # connection is exercised end to end with the official MCP SDK client,
+    # and on one without the Abilities API, where it must switch itself off
+    # cleanly while the rest of the plugin keeps working.
+    name: Integración (WordPress ${{ matrix.wp }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        wp: ['7.1.2', '6.8.2']
 
     env:
       WIT_TEST_DIR: ${{ github.workspace }}/../wit-integration
+      WIT_WP_VERSION: ${{ matrix.wp }}
       # Short and always writable: the kernel caps a UNIX socket path at 107
       # characters, and the runner is not root so /run/mysqld is out.
       WIT_DB_SOCKET: /tmp/wit-mysql.sock
@@ -81,6 +89,16 @@ jobs:
           coverage: none
           tools: none
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tests/integration/client/package-lock.json
+
+      - name: Instalar el cliente MCP de pruebas
+        working-directory: tests/integration/client
+        run: npm ci --no-audit --no-fund
+
       - name: Instalar MariaDB
         run: |
           sudo apt-get update -qq
@@ -93,7 +111,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.WIT_TEST_DIR }}/cache
-          key: wit-cache-wp6.8.2-wpcli2.11.0
+          key: wit-cache-wp${{ matrix.wp }}-wpcli2.11.0
 
       - name: Construir la instalación
         run: tests/integration/setup.sh
@@ -112,6 +130,8 @@ jobs:
           tail -40 "$WIT_TEST_DIR/mysql.err" 2>/dev/null || echo "(sin log)"
           echo "=== cadenas enviadas a la API ==="
           tail -20 "$WIT_TEST_DIR/www/wp-content/wit-ai-requests.log" 2>/dev/null || echo "(ninguna)"
+          echo "=== cliente MCP ==="
+          cat "$WIT_TEST_DIR/mcp-client.json" 2>/dev/null || echo "(no se ejecutó)"
 
   package:
     # The ZIP is what actually gets installed on a client site, so it is built

@@ -56,6 +56,74 @@ class WIT_Translator_Engine {
     private $glossary = null;
 
     /**
+     * Translations supplied from outside — by the Claude chat over MCP — in
+     * place of an API request.
+     *
+     * While set, stage 3 of every batch looks strings up here instead of
+     * calling a provider. There is no fallback to the API: a string missing
+     * from the map fails, because the whole point of the MCP path is that the
+     * user's subscription does the work and the API key is never charged.
+     *
+     * Static and scoped by with_external_translations(), because the engine is
+     * constructed in seven places across the pipeline (title, content,
+     * Elementor, meta, terms…) and threading an argument through all of them
+     * would be one missed call site away from a silent API charge.
+     *
+     * @var array<string,string>|null
+     */
+    private static $external = null;
+
+    /** @var string[] Source strings the external map did not cover. */
+    private static $external_missing = array();
+
+    /** @var array<string,string>|null This instance's view of the map. */
+    private $external_map = null;
+
+    /**
+     * Run $callback with every engine created inside it answering from $map.
+     *
+     * @param array<string,string> $map      Source text => translation.
+     * @param callable             $callback
+     * @return mixed Whatever $callback returns.
+     */
+    public static function with_external_translations(array $map, callable $callback) {
+        if (self::$external !== null) {
+            // Nesting would make it ambiguous which map applies.
+            throw new LogicException('External translations are already active.');
+        }
+
+        self::$external         = $map;
+        self::$external_missing = array();
+
+        try {
+            return $callback();
+        } finally {
+            self::$external = null;
+        }
+    }
+
+    /**
+     * Strings requested during the last external run that the map lacked.
+     *
+     * Should always be empty: WIT_Translation_Plan collects with the same
+     * functions the pipeline uses. Anything here means the two diverged.
+     *
+     * @return string[]
+     */
+    public static function external_missing() {
+        return array_values(array_unique(self::$external_missing));
+    }
+
+    /**
+     * Whether an external run is in progress.
+     *
+     * @return bool
+     */
+    public static function is_external_active() {
+        return self::$external !== null;
+    }
+
+    /**
      * Where the translations of the last call came from.
      *
      * @var array{glossary:int,memory:int,api:int,input_tokens:int,output_tokens:int}
@@ -70,6 +138,17 @@ class WIT_Translator_Engine {
 
     public function __construct() {
         $this->settings = WIT_Settings::instance()->get_settings();
+
+        if (self::$external !== null) {
+            $this->external_map = self::$external;
+            // Recorded in the memory and the logs, so an MCP translation is
+            // distinguishable from an API one after the fact.
+            $this->provider = 'mcp';
+            $this->model    = 'claude';
+            $this->api_key  = '';
+            return;
+        }
+
         $this->provider = $this->settings['ai_provider'];
 
         switch ($this->provider) {
@@ -124,6 +203,23 @@ class WIT_Translator_Engine {
             return array('translation' => $hits[$text], 'error' => null);
         }
 
+        if ($this->external_map !== null) {
+            $result = $this->external_lookup($text);
+
+            if (empty($result['error'])) {
+                $this->usage['api']++;
+                $memory->store_many(
+                    array($text => $result['translation']),
+                    $source_language,
+                    $target_language,
+                    $this->provider,
+                    $this->model
+                );
+            }
+
+            return $result;
+        }
+
         if (empty($this->api_key)) {
             return $this->error(__('API key no configurada', 'wpml-imagina-translate'));
         }
@@ -150,6 +246,80 @@ class WIT_Translator_Engine {
         }
 
         return $result;
+    }
+
+    /**
+     * Answer one string from the external map.
+     *
+     * @param string $text
+     * @return array{translation:string,error:string|null}
+     */
+    private function external_lookup($text) {
+        if (!isset($this->external_map[$text]) || trim((string) $this->external_map[$text]) === '') {
+            self::$external_missing[] = $text;
+            return $this->error(__('Falta la traducción de esta cadena', 'wpml-imagina-translate'));
+        }
+
+        $translation = (string) $this->external_map[$text];
+
+        // Plain source, plain translation. Content text nodes are escaped when
+        // applied, but title, excerpt, meta and term names are stored as-is,
+        // and translations are written with kses suspended so markup in the
+        // SOURCE survives. Without this, an account that lacks unfiltered_html
+        // could put a <script> into a post title through the chat, where the
+        // editor would never let it.
+        if (strpos($text, '<') === false) {
+            $translation = wp_strip_all_tags($translation);
+        }
+
+        return array('translation' => $translation, 'error' => null);
+    }
+
+    /**
+     * The subset of $texts that neither the glossary nor the memory answers.
+     *
+     * Lets the MCP planner send the chat only what genuinely needs
+     * translating: every string it skips is subscription usage not spent.
+     *
+     * @param string[] $texts
+     * @param string   $target_language
+     * @param string   $source_language
+     * @return string[]
+     */
+    public function unresolved(array $texts, $target_language, $source_language = '') {
+        $pending = array();
+
+        foreach ($texts as $text) {
+            if ($this->glossary()->resolve($text, $target_language) === null) {
+                $pending[] = $text;
+            }
+        }
+
+        if (empty($pending)) {
+            return array();
+        }
+
+        // Read-only on purpose: get_many() also bumps hit counters, which would
+        // count a translation as reused before anything has been saved.
+        $hits = WIT_Translation_Memory::instance()->peek_many($pending, $source_language, $target_language);
+
+        return array_values(array_filter($pending, function ($text) use ($hits) {
+            return !isset($hits[$text]);
+        }));
+    }
+
+    /**
+     * Glossary rules that apply to a set of strings, for the chat to follow.
+     *
+     * The API path injects these into its prompt; over MCP there is no prompt
+     * of ours, so they travel with the strings instead.
+     *
+     * @param string[] $texts
+     * @param string   $target_language
+     * @return string Empty when no rule is relevant.
+     */
+    public function glossary_guidance(array $texts, $target_language) {
+        return trim($this->glossary()->prompt_section($texts, $target_language));
     }
 
     /**
@@ -225,6 +395,24 @@ class WIT_Translator_Engine {
                     unset($pending[$i]);
                 }
             }
+        }
+
+        // Stage 3, MCP — whatever is new comes from the map the chat supplied.
+        // Never the API, not even for a single missing string.
+        if (!empty($pending) && $this->external_map !== null) {
+            $store = array();
+
+            foreach ($pending as $i => $text) {
+                $out[$i] = $this->external_lookup($text);
+
+                if (empty($out[$i]['error'])) {
+                    $this->usage['api']++;
+                    $store[$text] = $out[$i]['translation'];
+                }
+            }
+
+            $memory->store_many($store, $source_language, $target_language, $this->provider, $this->model);
+            $pending = array();
         }
 
         // Stage 3 — whatever is genuinely new goes to the provider.
@@ -961,7 +1149,7 @@ class WIT_Translator_Engine {
      * @param string $code
      * @return string
      */
-    private function get_language_name($code) {
+    public function get_language_name($code) {
         if (empty($code)) {
             return '';
         }

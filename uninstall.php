@@ -25,7 +25,7 @@ function wit_uninstall_site() {
 
     wp_clear_scheduled_hook('wit_process_queue');
 
-    foreach (array('wit_translation_logs', 'wit_translation_memory', 'wit_queue') as $table) {
+    foreach (array('wit_translation_logs', 'wit_translation_memory', 'wit_queue', 'wit_oauth_clients', 'wit_oauth_tokens') as $table) {
         $wpdb->query("DROP TABLE IF EXISTS {$wpdb->prefix}{$table}");
     }
 

@@ -15,6 +15,14 @@ class WIT_Settings {
     /** Screen id of the settings page, as returned by add_submenu_page(). */
     private $page_hook = '';
 
+    /**
+     * Set while the plugin itself writes an already-validated settings array,
+     * so the form sanitizer does not rebuild it from absent form fields.
+     *
+     * @var bool
+     */
+    private $internal_write = false;
+
     public static function instance() {
         if (is_null(self::$instance)) {
             self::$instance = new self();
@@ -35,6 +43,7 @@ class WIT_Settings {
         add_action('admin_page_access_denied', array($this, 'redirect_legacy_settings_url'));
         add_action('admin_enqueue_scripts', array($this, 'enqueue_assets'));
         add_action('admin_notices', array($this, 'missing_api_key_notice'));
+        add_action('admin_post_wit_revoke_connection', array($this, 'handle_revoke_connection'));
 
         // "Ajustes" straight from the plugins list, where people look first.
         add_filter('plugin_action_links_' . WIT_PLUGIN_BASENAME, array($this, 'add_action_links'));
@@ -62,6 +71,28 @@ class WIT_Settings {
     }
 
     /**
+     * Replace the glossary text, and nothing else.
+     *
+     * Written straight to the option rather than through update_option()'s
+     * sanitize callback: that callback rebuilds the whole settings array from
+     * form input, and a glossary edit coming from the chat must never be able
+     * to touch API keys or any other setting by accident.
+     *
+     * @param string $glossary
+     */
+    public function update_glossary($glossary) {
+        $settings             = $this->get_settings();
+        $settings['glossary'] = sanitize_textarea_field($glossary);
+
+        $this->internal_write = true;
+        try {
+            update_option($this->option_name, $settings, false);
+        } finally {
+            $this->internal_write = false;
+        }
+    }
+
+    /**
      * Add a direct "Ajustes" link to the plugin's row on the plugins screen.
      *
      * @param string[] $links
@@ -85,6 +116,12 @@ class WIT_Settings {
      */
     public function missing_api_key_notice() {
         if (!current_user_can('manage_options') || $this->has_api_key()) {
+            return;
+        }
+
+        // Translating through Claude needs no API key at all.
+        $settings = $this->get_settings();
+        if (!empty($settings['mcp_enabled'])) {
             return;
         }
 
@@ -217,6 +254,10 @@ class WIT_Settings {
      * @return array
      */
     public function sanitize_settings($input) {
+        if ($this->internal_write) {
+            return $input;
+        }
+
         if (!current_user_can('manage_options')) {
             return $this->get_settings();
         }
@@ -244,6 +285,7 @@ class WIT_Settings {
         $sanitized['glossary']                  = isset($input['glossary']) ? sanitize_textarea_field($input['glossary']) : '';
         $sanitized['translate_meta_fields']     = !empty($input['translate_meta_fields']);
         $sanitized['enable_translation_memory'] = !empty($input['enable_translation_memory']);
+        $sanitized['mcp_enabled']               = !empty($input['mcp_enabled']);
         $sanitized['batch_size']                = isset($input['batch_size']) ? min(50, max(1, absint($input['batch_size']))) : 5;
 
         // Meta keys only: strip anything that is not a valid meta key so the
@@ -612,10 +654,153 @@ class WIT_Settings {
                     </tr>
                 </table>
 
+                <?php $this->render_mcp_settings($settings); ?>
+
                 <?php submit_button(); ?>
             </form>
+
+            <?php $this->render_mcp_connections(); ?>
         </div>
         <?php
+    }
+
+    /**
+     * Problems that would stop Claude from connecting, in plain words.
+     *
+     * @return string[]
+     */
+    public function mcp_requirement_problems() {
+        $problems = array();
+
+        if (!class_exists('WIT_Abilities') || !WIT_Abilities::is_supported()) {
+            $problems[] = sprintf(
+                /* translators: %s: installed WordPress version */
+                __('Requiere WordPress 6.9 o superior (este sitio tiene %s).', 'wpml-imagina-translate'),
+                get_bloginfo('version')
+            );
+        }
+
+        if (!get_option('permalink_structure')) {
+            $problems[] = __('Los enlaces permanentes están en «Simple». Cámbialos en Ajustes → Enlaces permanentes a cualquier otra opción: la conexión necesita URLs limpias.', 'wpml-imagina-translate');
+        }
+
+        if (wp_parse_url(home_url(), PHP_URL_SCHEME) !== 'https') {
+            $problems[] = __('El sitio no usa HTTPS. Claude solo se conecta a servidores HTTPS.', 'wpml-imagina-translate');
+        }
+
+        return $problems;
+    }
+
+    private function render_mcp_settings(array $settings) {
+        $problems = $this->mcp_requirement_problems();
+        $url      = class_exists('WIT_OAuth') ? WIT_OAuth::resource_url() : '';
+        ?>
+        <h2 class="title"><?php esc_html_e('Conexión con Claude (MCP)', 'wpml-imagina-translate'); ?></h2>
+        <p class="description" style="max-width:720px;">
+            <?php esc_html_e('Traduce, revisa y consulta el estado desde el chat de Claude. La traducción la hace Claude con tu suscripción: por este camino nunca se usa la API key de este sitio, así que no hay gasto por tokens.', 'wpml-imagina-translate'); ?>
+        </p>
+        <table class="form-table">
+            <tr>
+                <th scope="row"><label for="mcp_enabled"><?php esc_html_e('Activar', 'wpml-imagina-translate'); ?></label></th>
+                <td>
+                    <label>
+                        <input type="checkbox"
+                               name="<?php echo esc_attr($this->option_name); ?>[mcp_enabled]"
+                               id="mcp_enabled"
+                               value="1"
+                               <?php checked(!empty($settings['mcp_enabled'])); ?>>
+                        <?php esc_html_e('Permitir que Claude se conecte a este sitio', 'wpml-imagina-translate'); ?>
+                    </label>
+                    <?php if (!empty($problems)) : ?>
+                        <div class="notice notice-warning inline" style="margin:10px 0 0;">
+                            <?php foreach ($problems as $problem) : ?>
+                                <p><?php echo esc_html($problem); ?></p>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <?php if (!empty($settings['mcp_enabled']) && $url !== '') : ?>
+                <tr>
+                    <th scope="row"><label for="wit-mcp-url"><?php esc_html_e('URL del conector', 'wpml-imagina-translate'); ?></label></th>
+                    <td>
+                        <input type="text" id="wit-mcp-url" class="large-text code" readonly value="<?php echo esc_attr($url); ?>" onclick="this.select();">
+                        <ol class="description" style="margin-left:1.5em;">
+                            <li><?php esc_html_e('En Claude, abre Personalizar → Conectores → Añadir conector personalizado.', 'wpml-imagina-translate'); ?></li>
+                            <li><?php esc_html_e('Pega esta URL exactamente como aparece y pulsa Añadir.', 'wpml-imagina-translate'); ?></li>
+                            <li><?php esc_html_e('Pulsa Conectar: se abrirá este sitio para que inicies sesión y apruebes el acceso.', 'wpml-imagina-translate'); ?></li>
+                        </ol>
+                        <p class="description"><?php esc_html_e('Claude actuará con los permisos de la cuenta con la que apruebes. Para limitar lo que puede hacer, apruébalo con una cuenta de rol Editor.', 'wpml-imagina-translate'); ?></p>
+                    </td>
+                </tr>
+            <?php endif; ?>
+        </table>
+        <?php
+    }
+
+    /**
+     * Active Claude connections, with a revoke button each.
+     *
+     * Outside the settings form: revoking must not also save the settings.
+     */
+    private function render_mcp_connections() {
+        if (!class_exists('WIT_OAuth') || !WIT_OAuth::is_enabled()) {
+            return;
+        }
+
+        $connections = WIT_OAuth::connections();
+        ?>
+        <h2 class="title"><?php esc_html_e('Conexiones activas', 'wpml-imagina-translate'); ?></h2>
+        <?php if (empty($connections)) : ?>
+            <p class="description"><?php esc_html_e('Todavía no hay ninguna conexión.', 'wpml-imagina-translate'); ?></p>
+        <?php else : ?>
+            <table class="widefat striped" style="max-width:900px;">
+                <thead>
+                    <tr>
+                        <th><?php esc_html_e('Aplicación', 'wpml-imagina-translate'); ?></th>
+                        <th><?php esc_html_e('Cuenta', 'wpml-imagina-translate'); ?></th>
+                        <th><?php esc_html_e('Conectada', 'wpml-imagina-translate'); ?></th>
+                        <th><?php esc_html_e('Último uso', 'wpml-imagina-translate'); ?></th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($connections as $connection) : ?>
+                        <tr>
+                            <td><?php echo esc_html($connection['client_name'] !== '' ? $connection['client_name'] : 'Claude'); ?></td>
+                            <td><?php echo esc_html($connection['user']); ?></td>
+                            <td><?php echo esc_html(get_date_from_gmt($connection['created_at'], get_option('date_format') . ' ' . get_option('time_format'))); ?></td>
+                            <td><?php echo esc_html($connection['last_used_at'] ? get_date_from_gmt($connection['last_used_at'], get_option('date_format') . ' ' . get_option('time_format')) : '—'); ?></td>
+                            <td>
+                                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin:0;">
+                                    <input type="hidden" name="action" value="wit_revoke_connection">
+                                    <input type="hidden" name="grant" value="<?php echo esc_attr($connection['grant_id']); ?>">
+                                    <?php wp_nonce_field('wit_revoke_' . $connection['grant_id']); ?>
+                                    <button type="submit" class="button button-small"><?php esc_html_e('Revocar', 'wpml-imagina-translate'); ?></button>
+                                </form>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
+        <?php
+    }
+
+    /**
+     * admin-post handler for the revoke buttons.
+     */
+    public function handle_revoke_connection() {
+        $grant = isset($_POST['grant']) ? sanitize_text_field(wp_unslash($_POST['grant'])) : '';
+
+        if (!current_user_can('manage_options') || !check_admin_referer('wit_revoke_' . $grant)) {
+            wp_die(esc_html__('No tienes permisos', 'wpml-imagina-translate'), '', array('response' => 403));
+        }
+
+        WIT_OAuth::instance()->revoke_grant($grant);
+
+        wp_safe_redirect(add_query_arg('wit-revoked', '1', $this->settings_url()));
+        exit;
     }
 
     /**
@@ -636,6 +821,7 @@ class WIT_Settings {
             'meta_fields_list' => '_yoast_wpseo_title,_yoast_wpseo_metadesc,_excerpt',
             'batch_size' => 5,
             'enable_translation_memory' => false,
+            'mcp_enabled' => false,
         );
 
         $settings = get_option($this->option_name, $defaults);

@@ -132,6 +132,7 @@ class WIT_Translation_Manager {
                         $this->translate_meta_fields($post_id, $existing_translation_id, $target_language, $source_language);
                     }
 
+                    WIT_Translation_Status::mark($post_id, $existing_translation_id);
                     $this->log_translation($post_id, $target_language, 'success', 'Updated existing translation');
 
                     return array(
@@ -166,6 +167,7 @@ class WIT_Translation_Manager {
                     $this->translate_meta_fields($post_id, $new_post_id, $target_language, $source_language);
                 }
 
+                WIT_Translation_Status::mark($post_id, $new_post_id);
                 $this->log_translation($post_id, $target_language, 'success', 'Created new translation');
 
                 return array(
@@ -195,16 +197,22 @@ class WIT_Translation_Manager {
      * @param string $target_language
      * @param string $source_language
      */
-    private function translate_meta_fields($source_post_id, $target_post_id, $target_language, $source_language) {
-        $meta_fields = array_filter(array_map('trim', explode(',', $this->settings['meta_fields_list'])));
-
-        if (empty($meta_fields)) {
-            return;
+    /**
+     * The configured meta fields of a post that would be translated.
+     *
+     * Shared by the translation itself and the MCP planner, so both see the
+     * same set of fields.
+     *
+     * @param int $post_id
+     * @return array meta key => value
+     */
+    public function collect_meta_values($post_id) {
+        if (empty($this->settings['translate_meta_fields'])) {
+            return array();
         }
 
-        // Collect first, then translate in one batched call. The previous
-        // implementation issued a separate API request per meta field.
-        $values = array();
+        $meta_fields = array_filter(array_map('trim', explode(',', $this->settings['meta_fields_list'])));
+        $values      = array();
 
         foreach ($meta_fields as $meta_key) {
             // Elementor's own meta is handled by WIT_Elementor_Handler; letting
@@ -213,7 +221,7 @@ class WIT_Translation_Manager {
                 continue;
             }
 
-            $value = get_post_meta($source_post_id, $meta_key, true);
+            $value = get_post_meta($post_id, $meta_key, true);
 
             if (!is_string($value) || trim($value) === '') {
                 continue;
@@ -221,6 +229,14 @@ class WIT_Translation_Manager {
 
             $values[$meta_key] = $value;
         }
+
+        return $values;
+    }
+
+    private function translate_meta_fields($source_post_id, $target_post_id, $target_language, $source_language) {
+        // Collect first, then translate in one batched call. The previous
+        // implementation issued a separate API request per meta field.
+        $values = $this->collect_meta_values($source_post_id);
 
         if (empty($values)) {
             return;
@@ -251,7 +267,9 @@ class WIT_Translation_Manager {
         global $wpdb;
 
         $source_language = $this->wpml_integration->get_post_language($post_id);
-        $ai_provider = $this->settings['ai_provider'];
+        // An MCP translation must be told apart from an API one in the history:
+        // one was paid per token, the other came out of the user's subscription.
+        $ai_provider = WIT_Translator_Engine::is_external_active() ? 'mcp' : $this->settings['ai_provider'];
 
         $wpdb->insert(
             $wpdb->prefix . 'wit_translation_logs',

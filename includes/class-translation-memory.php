@@ -83,6 +83,32 @@ class WIT_Translation_Memory {
      * @return array Map of source text => stored translation, for hits only.
      */
     public function get_many(array $texts, $source_lang, $target_lang) {
+        return $this->lookup($texts, $source_lang, $target_lang, true);
+    }
+
+    /**
+     * Like get_many(), without counting the lookup as a reuse.
+     *
+     * For planning: knowing a string is already translated is not the same as
+     * having reused it.
+     *
+     * @param string[] $texts
+     * @param string   $source_lang
+     * @param string   $target_lang
+     * @return array Map of source text => stored translation, for hits only.
+     */
+    public function peek_many(array $texts, $source_lang, $target_lang) {
+        return $this->lookup($texts, $source_lang, $target_lang, false);
+    }
+
+    /**
+     * @param string[] $texts
+     * @param string   $source_lang
+     * @param string   $target_lang
+     * @param bool     $count_hits
+     * @return array
+     */
+    private function lookup(array $texts, $source_lang, $target_lang, $count_hits) {
         if (empty($texts) || !$this->is_enabled()) {
             return array();
         }
@@ -124,7 +150,9 @@ class WIT_Translation_Memory {
             }
         }
 
-        $this->bump_hits($hits);
+        if ($count_hits) {
+            $this->bump_hits($hits);
+        }
 
         return $found;
     }
@@ -206,6 +234,29 @@ class WIT_Translation_Memory {
                 "UPDATE {$table} SET hits = hits + 1 WHERE text_hash IN ({$placeholders})",
                 $hashes
             )
+        );
+    }
+
+    /**
+     * Replace a translation wherever the memory holds it.
+     *
+     * When someone corrects a wording, future translations should use the
+     * correction instead of reintroducing the old text.
+     *
+     * @param string $target_lang
+     * @param string $old
+     * @param string $new
+     * @return int Entries updated.
+     */
+    public function replace_translation($target_lang, $old, $new) {
+        global $wpdb;
+
+        return (int) $wpdb->update(
+            self::table(),
+            array('translation' => (string) $new, 'updated_at' => current_time('mysql')),
+            array('target_lang' => $target_lang, 'translation' => (string) $old),
+            array('%s', '%s'),
+            array('%s', '%s')
         );
     }
 

@@ -14,7 +14,7 @@ set -euo pipefail
 
 PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TEST_DIR="${WIT_TEST_DIR:-${TMPDIR:-/tmp}/wit-integration}"
-WP_VERSION="${WIT_WP_VERSION:-6.8.2}"
+WP_VERSION="${WIT_WP_VERSION:-7.1.2}"
 WP_PORT="${WIT_WP_PORT:-8080}"
 DB_PORT="${WIT_DB_PORT:-3307}"
 
@@ -129,6 +129,10 @@ PHP
 
 "$WP" option update siteurl "http://127.0.0.1:$WP_PORT"
 "$WP" option update home    "http://127.0.0.1:$WP_PORT"
+
+# Pretty permalinks: the MCP endpoints need /wp-json/ URLs, and a real site
+# almost always has them.
+"$WP" rewrite structure '/%postname%/' >/dev/null
 
 # --- Plugin + fixtures -------------------------------------------------------
 say "Enlazando el plugin y los dobles de prueba"
