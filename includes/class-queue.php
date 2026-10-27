@@ -30,6 +30,15 @@ class WIT_Queue {
     const LOCK_KEY    = 'wit_queue_lock';
     const LOCK_TTL    = 600;
 
+    /** A claimed item untouched for this long belongs to a pass that died. */
+    const STALE_AFTER = 1800;
+
+    /** Interrupted that many times, an item is failed instead of retried. */
+    const MAX_ATTEMPTS = 3;
+
+    /** Finished items are kept this long for the progress view, then removed. */
+    const KEEP_FINISHED = WEEK_IN_SECONDS;
+
     const STATUS_PENDING    = 'pending';
     const STATUS_PROCESSING = 'processing';
     const STATUS_DONE       = 'done';
@@ -80,7 +89,7 @@ class WIT_Queue {
         $skipped = 0;
 
         foreach (array_unique(array_map('absint', $post_ids)) as $post_id) {
-            if (!$post_id || !get_post($post_id) || !current_user_can('edit_post', $post_id)) {
+            if (!$post_id || is_wp_error(WIT_WPML_Integration::instance()->can_translate($post_id, $target_language))) {
                 $skipped++;
                 continue;
             }
@@ -153,14 +162,14 @@ class WIT_Queue {
      * Hooked to the cron event; safe to call directly.
      */
     public function process() {
-        if (get_transient(self::LOCK_KEY)) {
+        if (!$this->acquire_lock()) {
             return; // Another pass is already running.
         }
 
-        set_transient(self::LOCK_KEY, time(), self::LOCK_TTL);
-
         @ignore_user_abort(true);
         @set_time_limit(0);
+
+        $this->cleanup();
 
         $settings = WIT_Settings::instance()->get_settings();
         $size     = max(1, min(50, (int) $settings['batch_size']));
@@ -178,7 +187,7 @@ class WIT_Queue {
             error_log('WIT queue: ' . $e->getMessage());
         } finally {
             wp_set_current_user($original_user);
-            delete_transient(self::LOCK_KEY);
+            $this->release_lock();
         }
 
         if ($this->count_pending() > 0) {
@@ -188,7 +197,72 @@ class WIT_Queue {
     }
 
     /**
-     * Atomically mark the next pending rows as processing and return them.
+     * Take the pass lock.
+     *
+     * An INSERT IGNORE on the options table's unique key: of two passes
+     * starting at once, exactly one inserts. Neither get_transient() followed
+     * by set_transient() (both read "free" before either writes) nor
+     * add_option() (an INSERT ... ON DUPLICATE KEY UPDATE, which "succeeds"
+     * for both) excludes anything. A lock older than LOCK_TTL belongs to a
+     * pass that died and is taken over.
+     *
+     * Correctness does not depend on it — claim() is atomic per row — but it
+     * keeps passes from piling up on a slow site.
+     *
+     * @return bool
+     */
+    private function acquire_lock() {
+        global $wpdb;
+
+        $insert = function () use ($wpdb) {
+            return (int) $wpdb->query($wpdb->prepare(
+                "INSERT IGNORE INTO {$wpdb->options} (option_name, option_value, autoload) VALUES (%s, %s, 'no')",
+                self::LOCK_KEY,
+                (string) time()
+            )) === 1;
+        };
+
+        wp_cache_delete(self::LOCK_KEY, 'options');
+
+        if ($insert()) {
+            return true;
+        }
+
+        $held_since = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
+            self::LOCK_KEY
+        ));
+
+        if ($held_since > time() - self::LOCK_TTL) {
+            return false;
+        }
+
+        // Taken over only if nobody else took it over first.
+        $wpdb->query($wpdb->prepare(
+            "DELETE FROM {$wpdb->options} WHERE option_name = %s AND option_value = %s",
+            self::LOCK_KEY,
+            (string) $held_since
+        ));
+
+        return $insert();
+    }
+
+    private function release_lock() {
+        global $wpdb;
+
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name = %s", self::LOCK_KEY));
+        wp_cache_delete(self::LOCK_KEY, 'options');
+    }
+
+    /**
+     * Claim the next pending rows, one atomic UPDATE per row.
+     *
+     * The previous version updated the rows as a set and then re-read them by
+     * status. A second pass that selected the same rows and lost the race
+     * still read them back — "processing" was exactly what the winner had
+     * set — and both passes translated them: twice the work, twice the API
+     * bill. Here a row belongs to a pass only when that pass's own UPDATE
+     * changed it.
      *
      * @param int $limit
      * @return array[]
@@ -204,30 +278,33 @@ class WIT_Queue {
             $limit
         ));
 
-        if (empty($ids)) {
+        $claimed = array();
+
+        foreach ((array) $ids as $id) {
+            $changed = $wpdb->query($wpdb->prepare(
+                "UPDATE {$table} SET status = %s, attempts = attempts + 1, updated_at = %s
+                 WHERE id = %d AND status = %s",
+                self::STATUS_PROCESSING,
+                current_time('mysql'),
+                (int) $id,
+                self::STATUS_PENDING
+            ));
+
+            if ((int) $changed === 1) {
+                $claimed[] = (int) $id;
+            }
+        }
+
+        if (empty($claimed)) {
             return array();
         }
 
-        $placeholders = implode(',', array_fill(0, count($ids), '%d'));
-
-        // The status check inside the UPDATE is what makes the claim atomic:
-        // a concurrent pass that already took these rows changes their status,
-        // so this update matches nothing.
-        // phpcs:ignore WordPress.DB.PreparedSQL -- placeholders generated, values bound.
-        $wpdb->query($wpdb->prepare(
-            "UPDATE {$table} SET status = %s, updated_at = %s
-             WHERE id IN ({$placeholders}) AND status = %s",
-            array_merge(
-                array(self::STATUS_PROCESSING, current_time('mysql')),
-                $ids,
-                array(self::STATUS_PENDING)
-            )
-        ));
+        $placeholders = implode(',', array_fill(0, count($claimed), '%d'));
 
         // phpcs:ignore WordPress.DB.PreparedSQL -- placeholders generated, values bound.
         return $wpdb->get_results($wpdb->prepare(
-            "SELECT * FROM {$table} WHERE id IN ({$placeholders}) AND status = %s",
-            array_merge($ids, array(self::STATUS_PROCESSING))
+            "SELECT * FROM {$table} WHERE id IN ({$placeholders}) ORDER BY id ASC",
+            $claimed
         ), ARRAY_A);
     }
 
@@ -327,7 +404,7 @@ class WIT_Queue {
             }
         }
 
-        $recent_sql = "SELECT q.post_id, q.status, q.message, q.target_lang
+        $recent_sql = "SELECT q.id, q.post_id, q.status, q.message, q.target_lang
                        FROM {$table} q {$where}
                        ORDER BY q.updated_at DESC LIMIT 15";
 
@@ -337,8 +414,16 @@ class WIT_Queue {
             : $wpdb->get_results($recent_sql, ARRAY_A);
 
         foreach ($recent as $index => $row) {
+            // Titles of other people's drafts and private posts are not an
+            // Author's business, even in a progress list.
+            if (!current_user_can('edit_post', (int) $row['post_id'])) {
+                unset($recent[$index]);
+                continue;
+            }
+            $recent[$index]['id']    = (int) $row['id'];
             $recent[$index]['title'] = get_the_title((int) $row['post_id']);
         }
+        $recent = array_values($recent);
 
         return array(
             'pending'    => $counts[self::STATUS_PENDING],
@@ -351,41 +436,80 @@ class WIT_Queue {
     }
 
     /**
-     * Remove finished rows, and requeue anything stuck in processing.
+     * Recover items abandoned by a pass that died, and forget old results.
      *
-     * @return int Rows removed.
+     * Never called before 1.4.0. A PHP fatal, a host timeout or an out of
+     * memory in the middle of an item left it "processing" for ever — and
+     * because enqueue() refuses a post already waiting or processing, that
+     * post could never be queued for that language again.
+     *
+     * Times are compared in the same clock they are written in:
+     * current_time('mysql'), the site's local time. The earlier draft compared
+     * them with gmdate(), which on a site at UTC-5 treated every running item
+     * as abandoned.
+     *
+     * @return array{requeued:int,failed:int,removed:int}
      */
     public function cleanup() {
         global $wpdb;
 
         $table = self::table();
+        $now   = current_time('timestamp');
+        $stale = gmdate('Y-m-d H:i:s', $now - self::STALE_AFTER);
 
-        // A pass that died mid-item leaves rows claimed forever; give them back.
-        $wpdb->query($wpdb->prepare(
+        // Interrupted too often: probably the item itself kills the process
+        // (a page too large for memory). Fail it so the queue moves on.
+        $failed = (int) $wpdb->query($wpdb->prepare(
+            "UPDATE {$table} SET status = %s, message = %s, updated_at = %s
+             WHERE status = %s AND updated_at < %s AND attempts >= %d",
+            self::STATUS_ERROR,
+            __('Se interrumpió varias veces sin terminar (¿tiempo o memoria del servidor?).', 'wpml-imagina-translate'),
+            current_time('mysql'),
+            self::STATUS_PROCESSING,
+            $stale,
+            self::MAX_ATTEMPTS
+        ));
+
+        $requeued = (int) $wpdb->query($wpdb->prepare(
             "UPDATE {$table} SET status = %s WHERE status = %s AND updated_at < %s",
             self::STATUS_PENDING,
             self::STATUS_PROCESSING,
-            gmdate('Y-m-d H:i:s', time() - self::LOCK_TTL * 2)
+            $stale
         ));
 
-        return (int) $wpdb->query($wpdb->prepare(
-            "DELETE FROM {$table} WHERE status IN (%s, %s)",
+        $removed = (int) $wpdb->query($wpdb->prepare(
+            "DELETE FROM {$table} WHERE status IN (%s, %s) AND updated_at < %s",
             self::STATUS_DONE,
-            self::STATUS_ERROR
+            self::STATUS_ERROR,
+            gmdate('Y-m-d H:i:s', $now - self::KEEP_FINISHED)
         ));
+
+        return array('requeued' => $requeued, 'failed' => $failed, 'removed' => $removed);
     }
 
     /**
-     * Discard everything that has not run yet.
+     * Discard what has not run yet.
+     *
+     * Editors and administrators cancel the whole queue; anyone else only what
+     * they queued themselves — an Author must not be able to throw away the
+     * site-wide job an administrator started.
      *
      * @return int
      */
     public function cancel_pending() {
         global $wpdb;
 
+        if (current_user_can('edit_others_posts')) {
+            return (int) $wpdb->query($wpdb->prepare(
+                'DELETE FROM ' . self::table() . ' WHERE status = %s',
+                self::STATUS_PENDING
+            ));
+        }
+
         return (int) $wpdb->query($wpdb->prepare(
-            'DELETE FROM ' . self::table() . ' WHERE status = %s',
-            self::STATUS_PENDING
+            'DELETE FROM ' . self::table() . ' WHERE status = %s AND user_id = %d',
+            self::STATUS_PENDING,
+            get_current_user_id()
         ));
     }
 

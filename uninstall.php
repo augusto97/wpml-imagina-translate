@@ -4,7 +4,7 @@
  *
  * Runs only when the plugin is deleted from the WordPress admin, never on
  * deactivation. Removes the settings option (which stores API keys), the
- * translation log table and any leftover job transients.
+ * plugin's tables, its transients and its bookkeeping post meta.
  *
  * Translated posts and their WPML links are deliberately left alone: they are
  * real content that the site owner may still want.
@@ -29,13 +29,22 @@ function wit_uninstall_site() {
         $wpdb->query("DROP TABLE IF EXISTS {$wpdb->prefix}{$table}");
     }
 
-    // Job status transients are named wit_job_{post_id}_{lang}. They expire on
-    // their own, but deleting the plugin should not leave rows behind.
+    delete_option('wit_queue_lock');
+
+    // Job status and MCP staging transients. They expire on their own, but
+    // deleting the plugin should not leave rows behind.
     $wpdb->query(
         "DELETE FROM {$wpdb->options}
          WHERE option_name LIKE '\_transient\_wit\_job\_%'
-            OR option_name LIKE '\_transient\_timeout\_wit\_job\_%'"
+            OR option_name LIKE '\_transient\_timeout\_wit\_job\_%'
+            OR option_name LIKE '\_transient\_wit\_mcp\_stage\_%'
+            OR option_name LIKE '\_transient\_timeout\_wit\_mcp\_stage\_%'"
     );
+
+    // The plugin's bookkeeping on translations (source fingerprint, when it
+    // was translated, the translation's own fingerprint). The translations
+    // themselves stay.
+    $wpdb->query("DELETE FROM {$wpdb->postmeta} WHERE meta_key IN ('_wit_source_hash', '_wit_source_modified', '_wit_translated_at', '_wit_translation_hash')");
 }
 
 if (is_multisite()) {

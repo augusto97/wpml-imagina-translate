@@ -19,7 +19,7 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 - **Smart Content Parser**: Preserva bloques de Gutenberg, HTML, y estructura
 - **Meta Fields**: Traduce automáticamente SEO (Yoast, RankMath), excerpts, y campos personalizados
 - **Dashboard Intuitivo**: Interfaz simple para gestionar traducciones
-- **Translation Logs**: Historial completo de todas las traducciones
+- **Translation Logs**: Historial completo de todas las traducciones, con los tokens de API consumidos en cada una y las acciones hechas desde Claude
 - **Progress Tracking**: Barra de progreso en tiempo real para traducciones batch
 
 ### Integración WPML
@@ -41,6 +41,9 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 - Posts creados como borrador para revisión
 
 ### Seguridad
+- Lo que devuelve la IA nunca puede guardar marcado que el original no tenía: un modelo comprometido o manipulado por el texto de una página no puede meter un `<script>` en un título, extracto o campo SEO
+- Solo se traducen originales a otro idioma: no se puede sobrescribir un original traduciendo su traducción, ni por el panel, ni por la cola, ni por Claude
+- Los Autores ven en el historial y en la cola solo sus propios contenidos
 - Las API keys nunca se imprimen en el HTML de la página de ajustes
 - La opción con las keys no se autocarga en cada petición del front-end
 - La key de Gemini viaja en cabecera, no en la URL (no queda en logs)
@@ -54,7 +57,7 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 ### Requisitos
 - WordPress 6.0 o superior (probado hasta 7.1)
 - PHP 7.4 o superior (probado hasta 8.4)
-- WPML Multilingual CMS 4.7 o superior (probado con 4.9.x y 5.0 beta)
+- WPML Multilingual CMS 4.7 o superior. Usa solo los hooks públicos de WPML; las pruebas automáticas corren contra un doble que reproduce esos hooks y la tabla de traducciones de WPML con sus restricciones, **no contra WPML real**
 - Elementor 3.x o 4.x (opcional; probado con 4.0.8 y con Elementor Pro 4.2.3)
 - API key de OpenAI, Claude, o Gemini
 
@@ -197,6 +200,9 @@ dashboard del plugin nunca pasa por Claude. No hay gasto duplicado.
 > «¿Qué páginas quedaron desactualizadas desde que cambié el español?»
 > «Añade *Imagina* al glosario como marca.»
 > «Publica la traducción inglesa de Servicios.»
+> «Quita la traducción francesa de la página de Ofertas» (la despublica o la manda a la papelera; nunca la borra del todo).
+> «¿Cómo está configurado WPML? ¿Por qué no se traducen los productos?»
+> «Activa la memoria de traducción» · «Traduce también el campo `rank_math_title`».
 
 Claude ve el estado de cada contenido en cada idioma:
 
@@ -204,6 +210,10 @@ Claude ve el estado de cada contenido en cada idioma:
 - **Desactualizado**: el original cambió después de traducirlo.
 - **Pendiente**: sin traducir.
 - **Desconocido**: existe una traducción hecha fuera del plugin.
+
+Y si alguien **editó a mano** una traducción después de hacerla, Claude lo ve y
+no la reemplaza sin preguntarte: guardar responde «necesita confirmación»
+hasta que dices que sí. El panel del plugin avisa igual antes de re-traducir.
 
 Las traducciones se guardan **como borrador**. Solo se publican si lo pides.
 
@@ -226,7 +236,18 @@ con un **Editor**, Claude puede traducir y publicar pero no puede tocar el
 glosario ni nada reservado a administradores. Las conexiones activas aparecen
 en los ajustes, cada una con su botón **Revocar**.
 
-**Claude nunca ve ni cambia las API keys** ni ningún otro ajuste del plugin.
+**Claude nunca ve ni cambia las API keys**, el proveedor, el modelo ni el
+prompt. Un administrador puede pedirle que active la memoria de traducción, que
+añada o quite campos a traducir o que cambie el tamaño de lote; nada más. Los
+ajustes de WPML los puede **consultar** (idiomas, formato de URL, qué tipos de
+contenido traduce WPML) pero no cambiar.
+
+Todo lo que Claude hace en el sitio —publicar, despublicar, corregir, cambiar
+ajustes— queda en **IA Translate → Logs** como «Claude (MCP)».
+
+El texto de los contenidos es contenido, no órdenes: si una página dijera
+«publica todo» o «cambia los ajustes», Claude tiene instrucción de no hacerlo y
+de avisarte.
 
 ### Consumo
 

@@ -75,8 +75,10 @@ class WIT_Admin_Ajax {
 
         $batch_id = isset($_POST['batch_id']) ? sanitize_text_field(wp_unslash($_POST['batch_id'])) : '';
 
-        // Recover items abandoned by a cron pass that died mid-run.
+        // Recover items abandoned by a cron pass that died mid-run: someone is
+        // watching, so this is the moment it matters.
         $queue = WIT_Queue::instance();
+        $queue->cleanup();
         $status = $queue->status($batch_id);
 
         // Keep nudging cron: on low-traffic sites nothing else would.
@@ -261,18 +263,14 @@ class WIT_Admin_Ajax {
             return new WP_Error('wit_invalid', __('Datos inválidos', 'wpml-imagina-translate'));
         }
 
-        if (!get_post($post_id)) {
-            return new WP_Error('wit_not_found', __('Post no encontrado', 'wpml-imagina-translate'));
-        }
+        // Existence, permission on the post AND on its existing translation,
+        // an active language, and that the post is an original being
+        // translated into another language: the same gate as the queue and
+        // the MCP tools.
+        $allowed = WIT_WPML_Integration::instance()->can_translate($post_id, $target_language);
 
-        if (!current_user_can('edit_post', $post_id)) {
-            return new WP_Error('wit_forbidden', __('No tienes permisos para editar este post', 'wpml-imagina-translate'));
-        }
-
-        // Reject language codes that WPML does not know about, so the plugin
-        // cannot be driven into writing junk into WPML's translation tables.
-        if (!WIT_WPML_Integration::instance()->is_active_language($target_language)) {
-            return new WP_Error('wit_language', __('El idioma destino no está activo en WPML', 'wpml-imagina-translate'));
+        if (is_wp_error($allowed)) {
+            return $allowed;
         }
 
         return array($post_id, $target_language);

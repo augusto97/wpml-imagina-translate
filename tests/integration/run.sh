@@ -353,7 +353,7 @@ except Exception:
 expect = [
     ("api_requests", 0, "ni una llamada a la API al traducir por MCP"),
     ("api_requests_final", 0, "ni una llamada a la API en todo el escenario"),
-    ("abilities_registered", True, "las 11 abilities están registradas"),
+    ("abilities_registered", True, "las 14 abilities están registradas"),
     ("rejects_11_posts", True, "más de 10 contenidos por tanda se rechaza"),
     ("has_title", True, "prepare incluye el título"),
     ("has_meta", True, "prepare incluye los campos SEO"),
@@ -492,8 +492,11 @@ for key, label in labels:
         print(f"  \033[31m✗\033[0m {label} (={d.get(key, '<ausente>')!r})"); bad += 1
         if os.environ.get("GITHUB_ACTIONS") == "true":
             print(f"::error title=G. MCP HTTP::{label} (={d.get(key, '<ausente>')!r})")
-if len(d.get("tools", [])) == 11:
-    print("  \033[32m✓\033[0m 11 herramientas expuestas")
+expected_tools = {"translation_overview", "list_posts", "post_translation_status", "prepare_translation", "save_translation",
+                  "get_translation", "correct_translation", "publish_translation", "remove_translation", "site_settings",
+                  "update_settings", "get_glossary", "update_glossary", "translation_history"}
+if set(d.get("tools", [])) == expected_tools:
+    print("  \033[32m✓\033[0m las 14 herramientas expuestas, con sus nombres")
 else:
     print(f"  \033[31m✗\033[0m herramientas: {d.get('tools')}"); bad += 1
 if d.get("saved_status") == "created" and d.get("prepared_strings", 0) > 0:
@@ -699,6 +702,142 @@ CHECK
 fi
 
 # =============================================================================
+section "K. Auditoría 1.4.0: cada fallo encontrado, como comprobación"
+# =============================================================================
+"$WP" eval-file "$FIXTURES/reset.php" >/dev/null
+"$WP" eval '$s = get_option("wit_settings"); $s["mcp_enabled"] = true; update_option("wit_settings", $s, false);' >/dev/null
+: > "$LOG"; : > "$AILOG"
+"$WP" eval-file "$FIXTURES/audit-140.php" > "$TEST_DIR/audit.json" 2>/dev/null
+
+python3 - "$TEST_DIR/audit.json" "$HAS_ABILITIES" <<'CHECK' | tee -a "$CHECKS" || FAIL=1
+import json, os, sys
+raw = open(sys.argv[1]).read()
+try:
+    d, _ = json.JSONDecoder().raw_decode(raw[raw.index('{'):])
+except Exception:
+    print("  \033[31m✗\033[0m audit-140.php no devolvió JSON:\n" + raw[-2000:])
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print("::error title=K. auditoría sin JSON::" + raw[-3000:].replace("%", "%25").replace("\n", "%0A"))
+    sys.exit(1)
+mcp = sys.argv[2] == "1"
+bad = 0
+def check(key, label, want=True, needs_mcp=False):
+    global bad
+    if needs_mcp and not mcp:
+        return
+    got = d.get(key, "<ausente>")
+    if got == want:
+        print(f"  \033[32m✓\033[0m {label}")
+    else:
+        bad += 1
+        print(f"  \033[31m✗\033[0m {label} (={got!r}, esperaba {want!r})")
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::error title=K. Auditoría 1.4.0::{label} (={got!r}, esperaba {want!r})")
+
+print("  — el original nunca se sobrescribe —")
+check("setup_translation", "se crea la traducción de partida")
+check("translation_into_default_refused", "traducir una traducción al idioma original se rechaza")
+check("original_untouched", "y el original queda intacto (antes se sobrescribía con «[ES] [EN] …»)")
+check("same_language_refused", "traducir al propio idioma se rechaza (antes creaba un duplicado)")
+check("queue_refuses_translation_as_source", "la cola tampoco acepta una traducción como origen")
+check("mcp_correct_on_translation_refused", "MCP: corregir con el ID de una traducción se rechaza", needs_mcp=True)
+check("mcp_publish_on_translation_refused", "MCP: publicar con el ID de una traducción se rechaza", needs_mcp=True)
+check("original_still_untouched", "y el original sigue intacto", needs_mcp=True)
+print("  — un modelo hostil no puede guardar scripts —")
+check("hostile_translated", "la traducción con un modelo hostil termina")
+check("hostile_title_clean", "título sin <script> ni onerror (antes se guardaban tal cual)")
+check("hostile_excerpt_clean", "extracto limpio")
+check("hostile_meta_clean", "título SEO limpio")
+check("hostile_render_clean", "contenido renderizado limpio")
+check("hostile_text_kept", "el texto traducido se conserva")
+check("hostile_memory_clean", "la memoria no guarda el payload")
+print("  — tokens registrados —")
+check("log_has_tokens", "el historial guarda los tokens de entrada y salida")
+check("log_has_strings", "y cuántas cadenas tradujo la IA")
+check("log_message_es", "mensaje del historial en español")
+check("stats_tokens_30d", "el panel suma los tokens de 30 días")
+print("  — traducciones en la papelera —")
+check("trashed_reported_missing", "una traducción en la papelera cuenta como pendiente (antes: «al día»)")
+check("retranslate_restores_same_post", "re-traducir reutiliza esa traducción (no crea otra)")
+check("restored_as_draft", "y la saca de la papelera como borrador (antes escribía dentro de la papelera)")
+print("  — ediciones manuales —")
+check("fresh_translation_not_edited", "una traducción recién hecha no cuenta como editada")
+check("hand_edit_detected", "una edición a mano se detecta")
+check("status_reports_edit", "el estado lo indica")
+check("listing_filters_edited", "el listado filtra «editadas a mano»")
+check("prepare_warns_edited", "MCP: prepare avisa de que hay ediciones a mano", needs_mcp=True)
+check("save_asks_confirmation", "MCP: guardar pide confirmación en vez de reemplazarlas", needs_mcp=True)
+check("edit_survives_unconfirmed_save", "MCP: y la edición sobrevive", needs_mcp=True)
+check("confirmed_save_overwrites", "MCP: con overwrite_edited se guarda sin reenviar cadenas", needs_mcp=True)
+check("after_overwrite_not_edited", "MCP: después ya no cuenta como editada", needs_mcp=True)
+check("mcp_still_no_api_calls", "MCP: ni una llamada a la API", needs_mcp=True)
+check("correction_not_flagged", "MCP: una corrección pedida a Claude no cuenta como edición a mano", needs_mcp=True)
+print("  — quitar traducciones por MCP —")
+check("unpublish_to_draft", "despublicar la devuelve a borrador", needs_mcp=True)
+check("trash_to_trash", "enviarla a la papelera", needs_mcp=True)
+check("trash_not_deleted", "sin borrarla del todo", needs_mcp=True)
+check("trash_again_says_none", "una vez en la papelera ya no hay traducción que quitar", needs_mcp=True)
+check("actions_logged", "las dos acciones quedan en el historial", needs_mcp=True)
+print("  — ajustes por MCP —")
+check("site_settings_languages", "site_settings describe los idiomas de WPML", needs_mcp=True)
+check("site_settings_no_secrets", "sin ninguna API key en la respuesta", needs_mcp=True)
+check("settings_changed", "update_settings cambia memoria y campos a traducir", needs_mcp=True)
+check("settings_keys_kept", "sin tocar API keys ni glosario", needs_mcp=True)
+check("elementor_meta_refused", "no deja añadir _elementor_data como campo", needs_mcp=True)
+check("whitelist_ignores_secrets", "la lista blanca ignora API keys, prompt y el interruptor MCP", needs_mcp=True)
+print("  — permisos —")
+check("author_cannot_see_others_logs", "un Autor no ve en el historial los posts que no puede editar")
+check("author_cannot_cancel_admin_queue", "un Autor no puede cancelar la cola de un administrador")
+check("author_cannot_update_settings", "un Autor no puede cambiar ajustes por MCP", needs_mcp=True)
+check("admin_sees_all_logs", "el administrador sí lo ve todo")
+check("admin_can_cancel", "y puede cancelar la cola")
+print("  — la cola —")
+check("stuck_item_was_blocking", "un elemento atascado bloqueaba volver a encolarlo")
+check("stuck_item_requeued", "ahora se recupera solo")
+check("thrice_interrupted_fails", "si se interrumpe 3 veces se marca como error y la cola sigue")
+check("losing_pass_gets_nothing", "dos pasadas a la vez no se llevan las mismas filas (antes: doble traducción)")
+check("lock_excludes", "el cerrojo excluye de verdad")
+if mcp:
+    print("  — OAuth —")
+check("code_race_statuses", "un código canjeado dos veces a la vez: uno 200 y otro 400", [200, 400], needs_mcp=True)
+check("code_race_one_pair", "y un solo par de tokens (antes: dos)", needs_mcp=True)
+check("refresh_race_statuses", "un refresh token usado dos veces a la vez: uno 200 y otro 400", [200, 400], needs_mcp=True)
+check("refresh_race_grant_revoked", "y la conexión entera se revoca", needs_mcp=True)
+print("  — el panel ve todo —")
+check("listing_total_over_100_limit_logic", "más de 100 contenidos")
+check("listing_two_pages", "repartidos en páginas de 50 (antes: solo los 100 más recientes)")
+check("listing_search", "la búsqueda encuentra uno concreto")
+check("listing_counts_pending", "los recuentos de las pestañas cuadran")
+sys.exit(1 if bad else 0)
+CHECK
+
+EN_ID=$(python3 -c "import json,sys;r=open(sys.argv[1]).read();d,_=json.JSONDecoder().raw_decode(r[r.index('{'):]);print(d.get('en_id',0))" "$TEST_DIR/audit.json" 2>/dev/null)
+
+echo "  — por HTTP —"
+reject "AJAX: traducir una traducción al idioma original" -b "$JAR" -d "action=wit_translate_post" -d "nonce=$NONCE" -d "post_id=$EN_ID" -d "target_language=es"
+page "admin.php?page=wpml-ia-translate&target_lang=en&post_types%5B%5D=post&wit_status=all&paged=2" "Panel, página 2" "Contenido de relleno"
+page "admin.php?page=wpml-ia-translate&target_lang=en&post_types%5B%5D=post&wit_s=relleno+42&wit_status=all" "Panel, búsqueda" "Contenido de relleno 42"
+
+# Logs as an Author: another user's private draft must not show up.
+"$WP" user update wit_audit_author --user_pass=autor-audit >/dev/null 2>&1
+SECRET=$("$WP" eval 'wp_set_current_user(1); $id = wp_insert_post(array("post_title" => "Borrador privado HTTP", "post_status" => "private", "post_type" => "post")); (new WIT_Translation_Manager())->log_event($id, "en", "prueba", "openai"); echo $id;' 2>/dev/null | tail -1)
+AJAR="$TEST_DIR/cookies-author.txt"; rm -f "$AJAR"
+"${CURL[@]}" -c "$AJAR" -b "$AJAR" -o /dev/null "$HOST/wp-login.php"
+"${CURL[@]}" -c "$AJAR" -b "$AJAR" -o /dev/null -X POST "$HOST/wp-login.php" \
+  --data-urlencode "log=wit_audit_author" --data-urlencode "pwd=autor-audit" \
+  --data-urlencode "wp-submit=Log In" --data-urlencode "testcookie=1"
+ALOGS=$("${CURL[@]}" -b "$AJAR" "$HOST/wp-admin/admin.php?page=wpml-ia-translate-logs")
+# Here-strings, not printf | grep -q: under pipefail, grep closing the pipe
+# early kills printf with SIGPIPE on a large page and the match reads as a miss.
+if grep -q "wit-logs" <<< "$ALOGS"; then
+  grep -q "Borrador privado HTTP" <<< "$ALOGS" && bad "un Autor ve el título del borrador privado de otro" || ok "Logs como Autor: el borrador privado de otro no aparece"
+else
+  bad "la página de logs no carga para un Autor"
+fi
+"$WP" post delete "$SECRET" --force >/dev/null 2>&1
+check_log "auditoría"
+
+# =============================================================================
 section "H. Guardado de ajustes por el formulario real"
 # =============================================================================
 : > "$LOG"
@@ -715,6 +854,13 @@ SNONCE=$(grep -o 'name="_wpnonce" value="[a-f0-9]*"' "$TEST_DIR/page-Ajustes.htm
   --data-urlencode "wit_settings[glossary]=Imagina"$'\n'"Hola = Hello" \
   -d "wit_settings[translate_meta_fields]=1" -d "wit_settings[meta_fields_list]=_yoast_wpseo_title" \
   -d "wit_settings[batch_size]=7" -d "wit_settings[enable_translation_memory]=1"
+
+# What the person sees after pressing Save: options.php sends them back with
+# settings-updated=true. Before 1.4.0 this page printed nothing at all.
+SAVED=$("${CURL[@]}" -b "$JAR" "$HOST/wp-admin/admin.php?page=wpml-imagina-translate-settings&settings-updated=true")
+grep -q 'setting-error-settings_updated' <<< "$SAVED" \
+  && ok "al guardar aparece el aviso de ajustes guardados" \
+  || bad "al guardar no aparece ningún aviso"
 
 E=$("$WP" eval '
 $s = get_option("wit_settings");

@@ -93,6 +93,64 @@ class WIT_Settings {
     }
 
     /**
+     * Settings that may be changed from the Claude chat, with their sanitizers.
+     *
+     * Deliberately short. Not here, ever: API keys and the provider (secrets
+     * and billing), the model, the translation prompt — text a manipulated
+     * chat could turn into "add this link to every page" for every future
+     * API translation — and the MCP switch itself.
+     *
+     * @return array<string,callable>
+     */
+    public static function chat_editable() {
+        return array(
+            'enable_translation_memory' => function ($value) { return (bool) $value; },
+            'translate_meta_fields'     => function ($value) { return (bool) $value; },
+            'batch_size'                => function ($value) { return min(50, max(1, absint($value))); },
+            'meta_fields_list'          => function ($value) {
+                $keys = array_filter(array_map(function ($key) {
+                    return preg_replace('/[^A-Za-z0-9_\-]/', '', trim((string) $key));
+                }, is_array($value) ? $value : explode(',', (string) $value)));
+                return implode(',', array_values(array_unique($keys)));
+            },
+        );
+    }
+
+    /**
+     * Change some of the chat-editable settings, and nothing else.
+     *
+     * @param array $changes key => value; unknown keys are ignored.
+     * @return array The keys actually changed.
+     */
+    public function update_chat_settings(array $changes) {
+        $settings = $this->get_settings();
+        $editable = self::chat_editable();
+        $changed  = array();
+
+        foreach ($changes as $key => $value) {
+            if (!isset($editable[$key])) {
+                continue;
+            }
+            $clean = call_user_func($editable[$key], $value);
+            if ($settings[$key] !== $clean) {
+                $settings[$key] = $clean;
+                $changed[]      = $key;
+            }
+        }
+
+        if (!empty($changed)) {
+            $this->internal_write = true;
+            try {
+                update_option($this->option_name, $settings, false);
+            } finally {
+                $this->internal_write = false;
+            }
+        }
+
+        return $changed;
+    }
+
+    /**
      * Add a direct "Ajustes" link to the plugin's row on the plugins screen.
      *
      * @param string[] $links
@@ -373,6 +431,17 @@ class WIT_Settings {
         ?>
         <div class="wrap">
             <h1><?php echo esc_html(get_admin_page_title()); ?></h1>
+
+            <?php
+            // WordPress prints "Settings saved" by itself only on pages under
+            // the Settings menu. This page moved to the plugin's own menu in
+            // 1.2.1, and saving has given no feedback at all since.
+            settings_errors();
+
+            if (isset($_GET['wit-revoked'])) : // phpcs:ignore WordPress.Security.NonceVerification -- display only.
+                ?>
+                <div class="notice notice-success is-dismissible"><p><?php esc_html_e('Conexión revocada. Claude ya no puede acceder con ella.', 'wpml-imagina-translate'); ?></p></div>
+            <?php endif; ?>
 
             <form method="post" action="options.php">
                 <?php
@@ -754,6 +823,7 @@ class WIT_Settings {
         <?php if (empty($connections)) : ?>
             <p class="description"><?php esc_html_e('Todavía no hay ninguna conexión.', 'wpml-imagina-translate'); ?></p>
         <?php else : ?>
+            <div class="wit-table-scroll">
             <table class="widefat striped" style="max-width:900px;">
                 <thead>
                     <tr>
@@ -783,6 +853,7 @@ class WIT_Settings {
                     <?php endforeach; ?>
                 </tbody>
             </table>
+            </div>
         <?php endif; ?>
         <?php
     }

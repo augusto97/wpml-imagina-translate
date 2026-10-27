@@ -103,7 +103,7 @@ class WIT_Abilities {
 
             'wit/list-posts' => array(
                 'label'       => __('Listar contenidos por estado', 'wpml-imagina-translate'),
-                'description' => 'List original posts with their translation status for one language. Filter by status: "pending" (missing or outdated — what needs work), "missing", "outdated", "current", "unknown" or "all". Paginated.',
+                'description' => 'List original posts with their translation status for one language. Filter by status: "pending" (missing or outdated — what needs work), "missing", "outdated", "current", "unknown", "edited" (translations someone changed by hand after they were made) or "all". Paginated.',
                 'input'       => array(
                     'type'       => 'object',
                     'required'   => array('language'),
@@ -111,7 +111,7 @@ class WIT_Abilities {
                         'language'   => $language,
                         'status'     => array(
                             'type'    => 'string',
-                            'enum'    => array('pending', 'missing', 'outdated', 'current', 'unknown', 'all'),
+                            'enum'    => array('pending', 'missing', 'outdated', 'current', 'unknown', 'edited', 'all'),
                             'default' => 'pending',
                         ),
                         'post_types' => $post_types,
@@ -169,7 +169,7 @@ class WIT_Abilities {
 
             'wit/save-translation' => array(
                 'label'       => __('Guardar traducción', 'wpml-imagina-translate'),
-                'description' => 'Save translations you produced for the strings from prepare_translation. "translations" maps each string id to its translation. A post is written only when all of its strings are present; otherwise the ones received are kept and the missing ones are listed, so send only those. Creates the translation as a draft, or updates the existing one, and links it in WPML.',
+                'description' => 'Save translations you produced for the strings from prepare_translation. "translations" maps each string id to its translation. A post is written only when all of its strings are present; otherwise the ones received are kept and the missing ones are listed, so send only those. Creates the translation as a draft, or updates the existing one, and links it in WPML. A translation that was edited by hand is not replaced unless overwrite_edited is true (status "needs_confirmation" until then).',
                 'input'       => array(
                     'type'       => 'object',
                     'required'   => array('language', 'post_ids', 'translations'),
@@ -186,11 +186,17 @@ class WIT_Abilities {
                             'description'          => 'Map of string id => translated text (plain text).',
                             'additionalProperties' => array('type' => 'string'),
                         ),
+                        'overwrite_edited' => array(
+                            'type'        => 'boolean',
+                            'default'     => false,
+                            'description' => 'Replace an existing translation that someone edited by hand. Only after the user has agreed to lose those edits.',
+                        ),
                     ),
                 ),
                 'execute'     => array(__CLASS__, 'save'),
                 'permission'  => 'edit_posts',
-                'annotations' => array('readonly' => false, 'destructive' => false, 'idempotent' => true),
+                // Updating replaces the existing translation's text.
+                'annotations' => array('readonly' => false, 'destructive' => true, 'idempotent' => true),
             ),
 
             'wit/get-translation' => array(
@@ -234,6 +240,50 @@ class WIT_Abilities {
                 ),
                 'execute'     => array(__CLASS__, 'publish'),
                 'permission'  => 'edit_posts',
+                'annotations' => array('readonly' => false, 'destructive' => false, 'idempotent' => true),
+            ),
+
+            'wit/remove-translation' => array(
+                'label'       => __('Quitar una traducción', 'wpml-imagina-translate'),
+                'description' => 'Take one translation off the site. mode "unpublish" turns it back into a draft (content kept, no longer visible); mode "trash" moves it to the WordPress trash, where it can be restored for 30 days — translating the post again later also restores it. Never deletes permanently. Only when the user explicitly asks to remove or unpublish a translation; say which one before doing it.',
+                'input'       => array(
+                    'type'       => 'object',
+                    'required'   => array('post_id', 'language', 'mode'),
+                    'properties' => array(
+                        'post_id'  => $post_id,
+                        'language' => $language,
+                        'mode'     => array('type' => 'string', 'enum' => array('unpublish', 'trash')),
+                    ),
+                ),
+                'execute'     => array(__CLASS__, 'remove_translation'),
+                'permission'  => 'edit_posts',
+                'annotations' => array('readonly' => false, 'destructive' => true, 'idempotent' => true),
+            ),
+
+            'wit/site-settings' => array(
+                'label'       => __('Configuración del sitio y de WPML', 'wpml-imagina-translate'),
+                'description' => 'How translation is set up on this site: WPML languages and URL format, which content types WPML translates, this plugin\'s settings (never secrets), and a list of problems worth fixing. Use it when the user asks how things are configured or why something is not being translated.',
+                'input'       => array('type' => 'object', 'properties' => array()),
+                'execute'     => array(__CLASS__, 'site_settings'),
+                'permission'  => 'edit_posts',
+                'annotations' => array('readonly' => true, 'destructive' => false, 'idempotent' => true),
+            ),
+
+            'wit/update-settings' => array(
+                'label'       => __('Cambiar ajustes de traducción', 'wpml-imagina-translate'),
+                'description' => 'Change this plugin\'s translation settings: turn the translation memory on or off, turn translation of SEO/custom fields on or off, add or remove custom fields to translate, set the background batch size. API keys, the AI provider, the model and the prompt cannot be changed from here — the user changes those in the plugin settings page. WPML\'s own settings are changed in WPML.',
+                'input'       => array(
+                    'type'       => 'object',
+                    'properties' => array(
+                        'translation_memory'   => array('type' => 'boolean', 'description' => 'Reuse earlier translations of identical text.'),
+                        'translate_meta_fields' => array('type' => 'boolean', 'description' => 'Translate the configured custom fields (SEO title, description…).'),
+                        'add_meta_fields'      => array('type' => 'array', 'items' => array('type' => 'string', 'pattern' => '^[A-Za-z0-9_\\-]+$', 'maxLength' => 100), 'maxItems' => 20),
+                        'remove_meta_fields'   => array('type' => 'array', 'items' => array('type' => 'string', 'maxLength' => 100), 'maxItems' => 20),
+                        'batch_size'           => array('type' => 'integer', 'minimum' => 1, 'maximum' => 50, 'description' => 'Posts per background (API) queue pass.'),
+                    ),
+                ),
+                'execute'     => array(__CLASS__, 'update_settings'),
+                'permission'  => 'manage_options',
                 'annotations' => array('readonly' => false, 'destructive' => false, 'idempotent' => true),
             ),
 
@@ -331,6 +381,7 @@ class WIT_Abilities {
             $posts  = $wpml->get_pending_translations($language['code'], $types, false, self::SCAN_LIMIT);
             $counts = array('current' => 0, 'outdated' => 0, 'missing' => 0, 'unknown' => 0);
             $drafts = 0;
+            $edited = 0;
 
             if (count($posts) >= self::SCAN_LIMIT) {
                 $truncated = true;
@@ -341,6 +392,9 @@ class WIT_Abilities {
                 $counts[$status['status']]++;
                 if ($status['translation_status'] === 'draft') {
                     $drafts++;
+                }
+                if ($status['edited']) {
+                    $edited++;
                 }
             }
 
@@ -354,6 +408,7 @@ class WIT_Abilities {
                 'missing'             => $counts['missing'],
                 'unknown'             => $counts['unknown'],
                 'drafts_to_review'    => $drafts,
+                'edited_by_hand'      => $edited,
                 'pending'             => $counts['missing'] + $counts['outdated'],
             );
         }
@@ -367,6 +422,7 @@ class WIT_Abilities {
                 'outdated' => 'Translated, but the original changed afterwards.',
                 'missing'  => 'Not translated yet.',
                 'unknown'  => 'A translation exists but was not made by this plugin, so its freshness cannot be checked.',
+                'edited_by_hand' => 'Translations someone changed by hand after they were made: translating them again replaces those edits.',
             ),
         );
 
@@ -390,50 +446,48 @@ class WIT_Abilities {
             return new WP_Error('wit_bad_language', sprintf('"%s" is not an active WPML language.', $language));
         }
 
-        $filter   = isset($input['status']) ? $input['status'] : 'pending';
-        $types    = self::post_types(isset($input['post_types']) ? $input['post_types'] : array());
-        $search   = isset($input['search']) ? (string) $input['search'] : '';
-        $page     = max(1, isset($input['page']) ? (int) $input['page'] : 1);
-        $per_page = min(self::MAX_PER_PAGE, max(1, isset($input['per_page']) ? (int) $input['per_page'] : 20));
+        $filter = isset($input['status']) ? $input['status'] : 'pending';
+        $list   = WIT_Translation_Status::listing(
+            $language,
+            self::post_types(isset($input['post_types']) ? $input['post_types'] : array()),
+            $filter,
+            isset($input['search']) ? (string) $input['search'] : '',
+            isset($input['page']) ? (int) $input['page'] : 1,
+            min(self::MAX_PER_PAGE, max(1, isset($input['per_page']) ? (int) $input['per_page'] : 20)),
+            self::SCAN_LIMIT
+        );
 
-        $matched = array();
-
-        foreach ($wpml->get_pending_translations($language, $types, false, self::SCAN_LIMIT, $search) as $post) {
-            $status = WIT_Translation_Status::of($post['id'], $language);
-
-            $wanted = ($filter === 'all')
-                || ($filter === 'pending' && in_array($status['status'], array('missing', 'outdated'), true))
-                || ($filter === $status['status']);
-
-            if (!$wanted) {
-                continue;
-            }
-
-            $matched[] = array(
+        $items = array();
+        foreach ($list['items'] as $post) {
+            $items[] = array(
                 'post_id'              => $post['id'],
                 'title'                => $post['title'],
                 'type'                 => $post['type'],
-                'status'               => $status['status'],
-                'translation_id'       => $status['translation_id'],
-                'translation_status'   => $status['translation_status'],
-                'translated_at'        => $status['translated_at'],
+                'status'               => $post['status'],
+                'edited_by_hand'       => $post['edited'],
+                'translation_id'       => $post['translation_id'],
+                'translation_status'   => $post['translation_status'],
+                'translated_at'        => $post['translated_at'],
                 'edit_url'             => $post['edit_url'],
-                'translation_edit_url' => $status['translation_id'] ? get_edit_post_link($status['translation_id'], 'raw') : '',
+                'translation_edit_url' => $post['translation_edit_url'],
             );
         }
 
-        $total  = count($matched);
         $result = array(
             'language' => $language,
             'status'   => $filter,
-            'total'    => $total,
-            'page'     => $page,
-            'pages'    => (int) max(1, ceil($total / $per_page)),
-            'items'    => array_slice($matched, ($page - 1) * $per_page, $per_page),
+            'total'    => $list['total'],
+            'page'     => $list['page'],
+            'pages'    => $list['pages'],
+            'items'    => $items,
         );
 
-        if (in_array($filter, array('pending', 'missing', 'outdated'), true) && $total > WIT_Translation_Plan::MAX_POSTS) {
-            $result['note'] = self::volume_note($total);
+        if ($list['truncated']) {
+            $result['truncated'] = sprintf('Only the %d most recently modified originals were inspected.', self::SCAN_LIMIT);
+        }
+
+        if (in_array($filter, array('pending', 'missing', 'outdated'), true) && $list['total'] > WIT_Translation_Plan::MAX_POSTS) {
+            $result['note'] = self::volume_note($list['total']);
         }
 
         return $result;
@@ -465,6 +519,7 @@ class WIT_Abilities {
                 'translation_id'       => $status['translation_id'],
                 'translation_status'   => $status['translation_status'],
                 'translated_at'        => $status['translated_at'],
+                'edited_by_hand'       => $status['edited'],
                 'translation_edit_url' => $status['translation_id'] ? get_edit_post_link($status['translation_id'], 'raw') : '',
             );
         }
@@ -492,7 +547,8 @@ class WIT_Abilities {
         return WIT_Translation_Plan::save(
             (array) $input['post_ids'],
             (string) $input['language'],
-            (array) $input['translations']
+            (array) $input['translations'],
+            !empty($input['overwrite_edited'])
         );
     }
 
@@ -575,6 +631,8 @@ class WIT_Abilities {
 
         list(, $translation) = $found;
 
+        $was_edited = WIT_Translation_Status::edited_by_hand($translation->ID);
+
         // Same rule as translations arriving over MCP: plain text stays plain.
         if (strpos($current, '<') === false) {
             $new = wp_strip_all_tags($new);
@@ -644,6 +702,21 @@ class WIT_Abilities {
 
         $memory_updated = WIT_Translation_Memory::instance()->replace_translation($language, $current_trimmed, trim($new));
 
+        // A correction made through the plugin is not a hand edit to protect:
+        // the memory now holds the new wording, so a re-translation keeps it.
+        // Only when the translation was untouched before, though — otherwise
+        // this would launder the person's own edits into "plugin text".
+        if (!$was_edited) {
+            WIT_Translation_Status::accept_edits($translation->ID);
+        }
+
+        (new WIT_Translation_Manager())->log_event($post_id, $language, sprintf(
+            /* translators: 1: old wording, 2: new wording */
+            __('Corrección desde Claude: «%1$s» → «%2$s»', 'wpml-imagina-translate'),
+            mb_substr($current_trimmed, 0, 80),
+            mb_substr(trim($new), 0, 80)
+        ));
+
         return array(
             'translation_id'      => $translation->ID,
             'changed'             => $changed,
@@ -673,6 +746,7 @@ class WIT_Abilities {
             // re-run the content through kses for users without
             // unfiltered_html and strip markup the translation inherited.
             wp_publish_post($translation->ID);
+            (new WIT_Translation_Manager())->log_event((int) $input['post_id'], (string) $input['language'], __('Traducción publicada desde Claude', 'wpml-imagina-translate'));
         }
 
         return array(
@@ -680,6 +754,160 @@ class WIT_Abilities {
             'post_status'    => get_post_status($translation->ID),
             'url'            => get_permalink($translation->ID),
         );
+    }
+
+    public static function remove_translation($input) {
+        $found = self::translation_of((int) $input['post_id'], (string) $input['language']);
+
+        if (is_wp_error($found)) {
+            return $found;
+        }
+
+        list($source, $translation) = $found;
+        $mode = (string) $input['mode'];
+
+        if ($mode === 'trash') {
+            if (!current_user_can('delete_post', $translation->ID)) {
+                return new WP_Error('wit_forbidden', 'You do not have permission to delete this translation.');
+            }
+            if (!wp_trash_post($translation->ID)) {
+                return new WP_Error('wit_trash_failed', 'WordPress could not move the translation to the trash.');
+            }
+            $message = __('Traducción enviada a la papelera desde Claude', 'wpml-imagina-translate');
+        } else {
+            if ($translation->post_status !== 'draft') {
+                // Status only, like publish: wp_update_post() would re-run the
+                // content through kses for users without unfiltered_html.
+                global $wpdb;
+                $wpdb->update($wpdb->posts, array('post_status' => 'draft'), array('ID' => $translation->ID));
+                clean_post_cache($translation->ID);
+                wp_transition_post_status('draft', $translation->post_status, get_post($translation->ID));
+            }
+            $message = __('Traducción despublicada (vuelve a borrador) desde Claude', 'wpml-imagina-translate');
+        }
+
+        (new WIT_Translation_Manager())->log_event($source->ID, (string) $input['language'], $message);
+
+        return array(
+            'translation_id' => $translation->ID,
+            'post_status'    => get_post_status($translation->ID),
+            'restorable'     => $mode === 'trash' ? 'From the WordPress trash for 30 days, or by translating the post again.' : 'Publish it again with publish_translation.',
+        );
+    }
+
+    public static function site_settings($input = array()) {
+        $wpml     = WIT_WPML_Integration::instance();
+        $plugin   = WIT_Settings::instance();
+        $settings = $plugin->get_settings();
+        $problems = array();
+
+        // WPML ---------------------------------------------------------------
+        $default   = $wpml->get_default_language();
+        $languages = array();
+        foreach ($wpml->get_active_languages() as $language) {
+            $languages[] = array('code' => $language['code'], 'name' => $language['name'], 'default' => $language['default']);
+        }
+
+        $url_formats = array(1 => 'directories (example.com/en/)', 2 => 'separate domains', 3 => 'URL parameter (?lang=en)');
+        $negotiation = apply_filters('wpml_setting', null, 'language_negotiation_type');
+
+        $types = array();
+        foreach (get_post_types(array('public' => true), 'objects') as $type) {
+            if ($type->name === 'attachment') {
+                continue;
+            }
+            $translatable = apply_filters('wpml_is_translated_post_type', null, $type->name);
+            $types[]      = array(
+                'post_type'    => $type->name,
+                'label'        => $type->labels->singular_name,
+                'translatable' => $translatable === null ? 'unknown' : (bool) $translatable,
+            );
+            if ($translatable === false && in_array($type->name, array('post', 'page', 'product'), true)) {
+                $problems[] = sprintf('WPML is set not to translate "%s". Those items cannot be translated until it is changed in WPML → Settings → Post Types Translation.', $type->labels->name);
+            }
+        }
+
+        // This plugin --------------------------------------------------------
+        $provider = $settings['ai_provider'];
+        $memory   = !empty($settings['enable_translation_memory']);
+        $glossary = WIT_Glossary::parse((string) $settings['glossary']);
+
+        if (!$memory) {
+            $problems[] = 'The translation memory is off: identical sentences are translated (and, through the API, paid for) again each time, and can come out worded differently. Turning it on is recommended (update_settings translation_memory: true).';
+        }
+        if (!$plugin->has_api_key()) {
+            $problems[] = 'No API key is configured, so the dashboard and the background queue cannot translate. Translating through this chat still works.';
+        }
+
+        return array(
+            'wpml'     => array(
+                'version'          => defined('ICL_SITEPRESS_VERSION') ? ICL_SITEPRESS_VERSION : 'unknown',
+                'default_language' => $default,
+                'languages'        => $languages,
+                'url_format'       => isset($url_formats[(int) $negotiation]) ? $url_formats[(int) $negotiation] : 'unknown',
+                'post_types'       => $types,
+            ),
+            'plugin'   => array(
+                'version'               => WIT_VERSION,
+                'api_provider'          => $provider,
+                'api_model'             => isset($settings[$provider . '_model']) ? $settings[$provider . '_model'] : '',
+                'api_key_configured'    => $plugin->has_api_key(),
+                'translation_memory'    => $memory,
+                'memory_entries'        => WIT_Translation_Memory::instance()->stats()['entries'],
+                'translate_meta_fields' => !empty($settings['translate_meta_fields']),
+                'meta_fields'           => array_values(array_filter(array_map('trim', explode(',', (string) $settings['meta_fields_list'])))),
+                'glossary_rules'        => count($glossary),
+                'batch_size'            => (int) $settings['batch_size'],
+                'new_translations_are'  => apply_filters('wit_new_translation_status', 'draft', null, ''),
+            ),
+            'problems' => $problems,
+            'note'     => 'API keys, provider, model and prompt are changed only in the plugin settings page; WPML\'s own settings only in WPML.',
+        );
+    }
+
+    public static function update_settings($input) {
+        $settings = WIT_Settings::instance()->get_settings();
+        $changes  = array();
+
+        if (isset($input['translation_memory'])) {
+            $changes['enable_translation_memory'] = (bool) $input['translation_memory'];
+        }
+        if (isset($input['translate_meta_fields'])) {
+            $changes['translate_meta_fields'] = (bool) $input['translate_meta_fields'];
+        }
+        if (isset($input['batch_size'])) {
+            $changes['batch_size'] = (int) $input['batch_size'];
+        }
+        if (!empty($input['add_meta_fields']) || !empty($input['remove_meta_fields'])) {
+            $fields = array_filter(array_map('trim', explode(',', (string) $settings['meta_fields_list'])));
+            $fields = array_values(array_diff($fields, array_map('trim', (array) (isset($input['remove_meta_fields']) ? $input['remove_meta_fields'] : array()))));
+            foreach ((array) (isset($input['add_meta_fields']) ? $input['add_meta_fields'] : array()) as $key) {
+                if (strpos((string) $key, '_elementor') === 0) {
+                    return new WP_Error('wit_bad_field', 'Elementor\'s data is translated on its own; it cannot be added as a custom field.');
+                }
+                $fields[] = (string) $key;
+            }
+            $changes['meta_fields_list'] = $fields;
+        }
+
+        if (empty($changes)) {
+            return new WP_Error('wit_nothing', 'Nothing to change.');
+        }
+
+        $changed = WIT_Settings::instance()->update_chat_settings($changes);
+
+        if (!empty($changed)) {
+            (new WIT_Translation_Manager())->log_event(0, '', sprintf(
+                /* translators: %s: setting names */
+                __('Ajustes cambiados desde Claude: %s', 'wpml-imagina-translate'),
+                implode(', ', $changed)
+            ));
+        }
+
+        $result            = self::site_settings();
+        $result['changed'] = $changed;
+
+        return $result;
     }
 
     public static function get_glossary($input = array()) {
@@ -768,7 +996,9 @@ class WIT_Abilities {
             if ($language !== '' && $log['target_lang'] !== $language) {
                 continue;
             }
-            if (!current_user_can('edit_post', (int) $log['post_id'])) {
+            // Settings changes have no post; only those who can change
+            // settings see them.
+            if ((int) $log['post_id'] === 0 ? !current_user_can('manage_options') : !current_user_can('edit_post', (int) $log['post_id'])) {
                 continue;
             }
 
@@ -780,6 +1010,7 @@ class WIT_Abilities {
                 'via'      => $log['ai_provider'] === 'mcp' ? 'claude (mcp)' : 'api (' . $log['ai_provider'] . ')',
                 'status'   => $log['status'],
                 'message'  => $log['message'],
+                'api_tokens' => isset($log['input_tokens']) ? (int) $log['input_tokens'] + (int) $log['output_tokens'] : 0,
                 'date'     => $log['created_at'],
             );
 
@@ -804,12 +1035,23 @@ class WIT_Abilities {
      */
     private static function translation_of($post_id, $language) {
         $source = get_post($post_id);
+        $wpml   = WIT_WPML_Integration::instance();
 
         if (!$source || !current_user_can('edit_post', $post_id)) {
             return new WP_Error('wit_not_found', sprintf('No post with ID %d that you can edit.', $post_id));
         }
 
-        $translation_id = WIT_WPML_Integration::instance()->get_translation_id($post_id, $language);
+        // The ID of a translation with the default language would resolve to
+        // the ORIGINAL as "its translation", and correct or publish it.
+        if (!$wpml->is_original($post_id)) {
+            return new WP_Error('wit_not_source', sprintf('Post %d is itself a translation. Use the ID of the original (post_translation_status shows it).', $post_id));
+        }
+
+        if ($language === $wpml->get_default_language()) {
+            return new WP_Error('wit_same_language', sprintf('"%s" is the language of the original, not a translation.', $language));
+        }
+
+        $translation_id = $wpml->get_translation_id($post_id, $language);
 
         if (!$translation_id) {
             return new WP_Error('wit_no_translation', sprintf('Post %d has no translation into "%s" yet.', $post_id, $language));

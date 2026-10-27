@@ -222,3 +222,15 @@ WIT_Tests::same(
     'unresolved() excluye lo que el glosario resuelve entero'
 );
 WIT_Settings::$overrides = array();
+
+WIT_Tests::group('Salida del modelo — nunca se guarda marcado que el original no tenía');
+
+// A compromised model, or one manipulated by the text it was asked to
+// translate, answering with markup. Titles, excerpts and SEO fields are
+// stored as returned and printed unescaped by most themes.
+$payload = '<img src=x onerror=alert(1)><script>alert(2)</script>Hola mundo';
+WIT_Tests::same('Hola mundo', WIT_Translator_Engine::clean_output('Hello world', $payload), 'origen sin marcado: la respuesta queda en texto plano');
+WIT_Tests::same(' Hola ', WIT_Translator_Engine::clean_output(' Hello ', ' Hola '), 'los espacios de los extremos se conservan (son parte de la frase)');
+WIT_Tests::same('Precios < 10€', WIT_Translator_Engine::clean_output('Prices < 10€', 'Precios < 10€'), 'un "<" que no es una etiqueta sobrevive');
+$kept = WIT_Translator_Engine::clean_output('<b>Rich</b> text', '<b onclick="steal()">Rico</b> texto<script>x</script>');
+WIT_Tests::ok(strpos($kept, '<b>') !== false && strpos($kept, 'onclick') === false && strpos($kept, '<script') === false, 'origen con marcado: el formato se conserva, los scripts y eventos no');

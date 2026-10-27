@@ -9,6 +9,12 @@ if (!defined('ABSPATH')) {
 
 class WIT_Translation_Dashboard {
 
+    /** Rows per page in the dashboard listing. */
+    const PER_PAGE = 50;
+
+    /** Originals inspected per listing; status is computed, not queried. */
+    const SCAN_LIMIT = 2000;
+
     private static $instance = null;
 
     public static function instance() {
@@ -87,6 +93,15 @@ class WIT_Translation_Dashboard {
                 'success' => __('Traducción completada', 'wpml-imagina-translate'),
                 'error' => __('Error en la traducción', 'wpml-imagina-translate'),
                 'confirm_batch' => __('¿Está seguro de que desea traducir los posts seleccionados?', 'wpml-imagina-translate'),
+                /* translators: %d: number of translations edited by hand */
+                'confirm_edited_batch' => __('%d de los seleccionados tienen una traducción editada a mano. Traducirlos de nuevo reemplazará esas ediciones. ¿Continuar?', 'wpml-imagina-translate'),
+                'confirm_edited' => __('Esta traducción se editó a mano después de hacerse. Traducirla de nuevo reemplazará esas ediciones. ¿Continuar?', 'wpml-imagina-translate'),
+                'confirm_existing' => __('Ya existe una traducción. Se generará de nuevo desde el original. ¿Continuar?', 'wpml-imagina-translate'),
+                /* translators: %d: number of selected posts */
+                'selected' => __('%d seleccionados', 'wpml-imagina-translate'),
+                'retranslate' => __('Re-Traducir', 'wpml-imagina-translate'),
+                'edit_translation' => __('Editar traducción', 'wpml-imagina-translate'),
+                'translated' => __('Al día', 'wpml-imagina-translate'),
             ),
         ));
     }
@@ -124,9 +139,29 @@ class WIT_Translation_Dashboard {
             $selected_post_types = array('post', 'page');
         }
 
-        $pending_posts = $target_language !== ''
-            ? $wpml_integration->get_pending_translations($target_language, $selected_post_types)
-            : array();
+        $filters = array(
+            'pending'  => __('Pendientes', 'wpml-imagina-translate'),
+            'outdated' => __('Desactualizadas', 'wpml-imagina-translate'),
+            'current'  => __('Al día', 'wpml-imagina-translate'),
+            'edited'   => __('Editadas a mano', 'wpml-imagina-translate'),
+            'all'      => __('Todos', 'wpml-imagina-translate'),
+        );
+
+        $status_filter = isset($_GET['wit_status']) ? sanitize_key(wp_unslash($_GET['wit_status'])) : 'pending';
+        if (!isset($filters[$status_filter])) {
+            $status_filter = 'pending';
+        }
+
+        $search = isset($_GET['wit_s']) ? sanitize_text_field(wp_unslash($_GET['wit_s'])) : '';
+        $paged  = isset($_GET['paged']) ? max(1, absint($_GET['paged'])) : 1;
+
+        // The listing used to stop at the 100 most recently modified posts,
+        // with no paging: on a larger site the rest were simply not there.
+        $listing = $target_language !== ''
+            ? WIT_Translation_Status::listing($target_language, $selected_post_types, $status_filter, $search, $paged, self::PER_PAGE, self::SCAN_LIMIT)
+            : null;
+
+        $pending_posts = $listing ? $listing['items'] : array();
 
         $translation_manager = new WIT_Translation_Manager();
         $stats               = $translation_manager->get_statistics();
@@ -142,8 +177,13 @@ class WIT_Translation_Dashboard {
             wp_die(esc_html__('No tienes permisos para acceder a esta página.', 'wpml-imagina-translate'));
         }
 
+        $per_page            = 50;
+        $paged               = isset($_GET['paged']) ? max(1, absint($_GET['paged'])) : 1;
         $translation_manager = new WIT_Translation_Manager();
-        $logs                = $translation_manager->get_translation_logs(100);
+        $total_logs          = $translation_manager->count_translation_logs();
+        $total_pages         = (int) max(1, ceil($total_logs / $per_page));
+        $paged               = min($paged, $total_pages);
+        $logs                = $translation_manager->get_translation_logs($per_page, ($paged - 1) * $per_page);
 
         include WIT_PLUGIN_DIR . 'admin/views/logs.php';
     }

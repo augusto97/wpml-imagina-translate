@@ -43,6 +43,7 @@ class WIT_WPML_Stub {
         add_filter('wpml_element_type',           array($this, 'element_type'));
         add_filter('wpml_element_language_code',  array($this, 'element_language_code'), 10, 2);
         add_filter('wpml_element_trid',           array($this, 'element_trid'), 10, 3);
+        add_filter('wpml_element_language_details', array($this, 'element_language_details'), 10, 2);
         add_filter('wpml_object_id',              array($this, 'object_id'), 10, 4);
         add_action('wpml_set_element_language_details', array($this, 'set_element_language_details'));
 
@@ -96,6 +97,19 @@ class WIT_WPML_Stub {
             "SELECT language_code FROM {$this->table()} WHERE element_type = %s AND element_id = %d",
             $this->element_type($args['element_type']), (int) $args['element_id']
         ));
+    }
+
+    /**
+     * Same shape as WPML's: an object with trid, language_code and
+     * source_language_code (NULL for the original), or null when unknown.
+     */
+    public function element_language_details($null, $args) {
+        global $wpdb;
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT element_id, trid, language_code, source_language_code FROM {$this->table()} WHERE element_type = %s AND element_id = %d",
+            $this->element_type($args['element_type']), (int) $args['element_id']
+        ));
+        return $row ? $row : null;
     }
 
     public function element_trid($null, $element_id, $element_type) {

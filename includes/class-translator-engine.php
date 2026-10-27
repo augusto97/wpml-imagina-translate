@@ -136,6 +136,100 @@ class WIT_Translator_Engine {
         'output_tokens' => 0,
     );
 
+    /**
+     * The same figures summed over every engine of the current job.
+     *
+     * One post is translated by several engines — title and excerpt, content,
+     * Elementor, meta, term names — each counting only its own calls, so the
+     * per-instance figures were thrown away with the instance and the token
+     * counts promised in the logs were never recorded anywhere. The
+     * translation manager opens a job, and reads the total when it logs it.
+     *
+     * @var array|null
+     */
+    private static $job_usage = null;
+
+    /**
+     * Start counting for a job; returns the previous counter so nested jobs
+     * (a term created during a post translation) can be restored.
+     *
+     * @return array|null
+     */
+    public static function begin_job_usage() {
+        $previous        = self::$job_usage;
+        self::$job_usage = array('glossary' => 0, 'memory' => 0, 'api' => 0, 'input_tokens' => 0, 'output_tokens' => 0);
+        return $previous;
+    }
+
+    /**
+     * Stop counting and return the job's totals.
+     *
+     * @param array|null $restore What begin_job_usage() returned.
+     * @return array{glossary:int,memory:int,api:int,input_tokens:int,output_tokens:int}
+     */
+    public static function end_job_usage($restore = null) {
+        $usage = self::$job_usage !== null
+            ? self::$job_usage
+            : array('glossary' => 0, 'memory' => 0, 'api' => 0, 'input_tokens' => 0, 'output_tokens' => 0);
+        self::$job_usage = $restore;
+        return $usage;
+    }
+
+    /**
+     * The open job's totals so far, without closing it.
+     *
+     * @return array{glossary:int,memory:int,api:int,input_tokens:int,output_tokens:int}
+     */
+    public static function job_usage_snapshot() {
+        return self::$job_usage !== null
+            ? self::$job_usage
+            : array('glossary' => 0, 'memory' => 0, 'api' => 0, 'input_tokens' => 0, 'output_tokens' => 0);
+    }
+
+    /**
+     * Add to a usage counter, on this engine and on the open job.
+     *
+     * @param string $key
+     * @param int    $amount
+     */
+    private function count($key, $amount = 1) {
+        $this->usage[$key] += (int) $amount;
+        if (self::$job_usage !== null) {
+            self::$job_usage[$key] += (int) $amount;
+        }
+    }
+
+    /**
+     * Make a model's answer safe to store, whatever it contains.
+     *
+     * Content text nodes are escaped when written back, but titles, excerpts,
+     * SEO fields and Elementor plain-text settings are stored as returned, and
+     * translations are written with kses suspended so the SOURCE markup
+     * survives. A model that answers with markup — because it was compromised,
+     * or because the text it was given told it to (prompt injection from a
+     * contributor's post) — would otherwise put a <script> into a translated
+     * title, which themes print unescaped on the public site.
+     *
+     *   plain source  → plain translation (tags removed)
+     *   markup source → markup limited to what post content may contain
+     *
+     * @param string $source
+     * @param string $translation
+     * @return string
+     */
+    public static function clean_output($source, $translation) {
+        $translation = (string) $translation;
+
+        if (strpos((string) $source, '<') === false) {
+            // Not wp_strip_all_tags(): it trims, and a text node's leading or
+            // trailing space is part of the sentence it sits in.
+            $clean = preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', $translation);
+            return strip_tags($clean);
+        }
+
+        return function_exists('wp_kses_post') ? wp_kses_post($translation) : strip_tags($translation);
+    }
+
     public function __construct() {
         $this->settings = WIT_Settings::instance()->get_settings();
 
@@ -191,7 +285,7 @@ class WIT_Translator_Engine {
         // request, which is both free and perfectly consistent.
         $forced = $this->glossary()->resolve($text, $target_language);
         if ($forced !== null) {
-            $this->usage['glossary']++;
+            $this->count('glossary');
             return array('translation' => $forced, 'error' => null);
         }
 
@@ -199,15 +293,17 @@ class WIT_Translator_Engine {
         $hits   = $memory->get_many(array($text), $source_language, $target_language);
 
         if (isset($hits[$text])) {
-            $this->usage['memory']++;
-            return array('translation' => $hits[$text], 'error' => null);
+            $this->count('memory');
+            // Cleaned on the way out too: the memory may hold answers stored
+            // by a version that did not clean them.
+            return array('translation' => self::clean_output($text, $hits[$text]), 'error' => null);
         }
 
         if ($this->external_map !== null) {
             $result = $this->external_lookup($text);
 
             if (empty($result['error'])) {
-                $this->usage['api']++;
+                $this->count('api');
                 $memory->store_many(
                     array($text => $result['translation']),
                     $source_language,
@@ -231,11 +327,11 @@ class WIT_Translator_Engine {
         $result = $this->request($text, $prompt);
 
         if (empty($result['error'])) {
-            $result['translation'] = $this->unwrap_single($result['translation'], $text);
+            $result['translation'] = self::clean_output($text, $this->unwrap_single($result['translation'], $text));
         }
 
         if (empty($result['error']) && $result['translation'] !== '') {
-            $this->usage['api']++;
+            $this->count('api');
             $memory->store_many(
                 array($text => $result['translation']),
                 $source_language,
@@ -260,19 +356,10 @@ class WIT_Translator_Engine {
             return $this->error(__('Falta la traducción de esta cadena', 'wpml-imagina-translate'));
         }
 
-        $translation = (string) $this->external_map[$text];
-
-        // Plain source, plain translation. Content text nodes are escaped when
-        // applied, but title, excerpt, meta and term names are stored as-is,
-        // and translations are written with kses suspended so markup in the
-        // SOURCE survives. Without this, an account that lacks unfiltered_html
-        // could put a <script> into a post title through the chat, where the
-        // editor would never let it.
-        if (strpos($text, '<') === false) {
-            $translation = wp_strip_all_tags($translation);
-        }
-
-        return array('translation' => $translation, 'error' => null);
+        // Same rule as for the API: an account that lacks unfiltered_html
+        // must not be able to put a <script> into a title through the chat,
+        // where the editor would never let it.
+        return array('translation' => self::clean_output($text, (string) $this->external_map[$text]), 'error' => null);
     }
 
     /**
@@ -375,7 +462,7 @@ class WIT_Translator_Engine {
 
             if ($forced !== null) {
                 $out[$i] = array('translation' => $forced, 'error' => null);
-                $this->usage['glossary']++;
+                $this->count('glossary');
                 continue;
             }
 
@@ -390,8 +477,8 @@ class WIT_Translator_Engine {
 
             foreach ($pending as $i => $text) {
                 if (isset($hits[$text])) {
-                    $out[$i] = array('translation' => $hits[$text], 'error' => null);
-                    $this->usage['memory']++;
+                    $out[$i] = array('translation' => self::clean_output($text, $hits[$text]), 'error' => null);
+                    $this->count('memory');
                     unset($pending[$i]);
                 }
             }
@@ -406,7 +493,7 @@ class WIT_Translator_Engine {
                 $out[$i] = $this->external_lookup($text);
 
                 if (empty($out[$i]['error'])) {
-                    $this->usage['api']++;
+                    $this->count('api');
                     $store[$text] = $out[$i]['translation'];
                 }
             }
@@ -438,8 +525,13 @@ class WIT_Translator_Engine {
                         ? $results[$i]
                         : $this->error(__('Sin respuesta del proveedor', 'wpml-imagina-translate'));
 
+                    if (empty($out[$i]['error'])) {
+                        // Before the memory: it must never hold a payload.
+                        $out[$i]['translation'] = self::clean_output($text, $out[$i]['translation']);
+                    }
+
                     if (empty($out[$i]['error']) && $out[$i]['translation'] !== '') {
-                        $this->usage['api']++;
+                        $this->count('api');
                         $store[$text] = $out[$i]['translation'];
                     }
                 }
@@ -1212,25 +1304,25 @@ class WIT_Translator_Engine {
     private function record_tokens(array $decoded) {
         // OpenAI: usage.prompt_tokens / completion_tokens
         if (isset($decoded['usage']['prompt_tokens'])) {
-            $this->usage['input_tokens']  += (int) $decoded['usage']['prompt_tokens'];
-            $this->usage['output_tokens'] += isset($decoded['usage']['completion_tokens'])
-                ? (int) $decoded['usage']['completion_tokens'] : 0;
+            $this->count('input_tokens', (int) $decoded['usage']['prompt_tokens']);
+            $this->count('output_tokens', isset($decoded['usage']['completion_tokens'])
+                ? (int) $decoded['usage']['completion_tokens'] : 0);
             return;
         }
 
         // Claude: usage.input_tokens / output_tokens
         if (isset($decoded['usage']['input_tokens'])) {
-            $this->usage['input_tokens']  += (int) $decoded['usage']['input_tokens'];
-            $this->usage['output_tokens'] += isset($decoded['usage']['output_tokens'])
-                ? (int) $decoded['usage']['output_tokens'] : 0;
+            $this->count('input_tokens', (int) $decoded['usage']['input_tokens']);
+            $this->count('output_tokens', isset($decoded['usage']['output_tokens'])
+                ? (int) $decoded['usage']['output_tokens'] : 0);
             return;
         }
 
         // Gemini: usageMetadata.promptTokenCount / candidatesTokenCount
         if (isset($decoded['usageMetadata']['promptTokenCount'])) {
-            $this->usage['input_tokens']  += (int) $decoded['usageMetadata']['promptTokenCount'];
-            $this->usage['output_tokens'] += isset($decoded['usageMetadata']['candidatesTokenCount'])
-                ? (int) $decoded['usageMetadata']['candidatesTokenCount'] : 0;
+            $this->count('input_tokens', (int) $decoded['usageMetadata']['promptTokenCount']);
+            $this->count('output_tokens', isset($decoded['usageMetadata']['candidatesTokenCount'])
+                ? (int) $decoded['usageMetadata']['candidatesTokenCount'] : 0);
         }
     }
 

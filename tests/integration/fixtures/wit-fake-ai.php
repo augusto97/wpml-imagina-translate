@@ -21,6 +21,8 @@ class WIT_Fake_AI {
      *   preamble    chatty answer with markdown around the markers
      *   drop_item   omits item 2 of every batch (forces the per-item retry)
      *   rate_limit  first call answers 429, the retry succeeds
+     *   hostile     every translation carries an XSS payload, as a compromised
+     *               or prompt-injected model could return
      */
     private function mode() {
         return get_option('wit_fake_mode', 'normal');
@@ -141,6 +143,9 @@ class WIT_Fake_AI {
     }
 
     private function translate($text, $lang) {
+        if ($this->mode() === 'hostile') {
+            return '<img src=x onerror=alert(1)><script>alert(2)</script>[' . $lang . '] ' . $text;
+        }
         return '[' . $lang . '] ' . $text;
     }
 

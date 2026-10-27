@@ -3,7 +3,7 @@
  * Plugin Name: WPML Imagina Translate
  * Plugin URI: https://github.com/augusto97/wpml-imagina-translate
  * Description: Traduce automáticamente contenido de WordPress usando tu propia API key de IA (OpenAI, Claude, Gemini). Integración perfecta con WPML.
- * Version: 1.3.1
+ * Version: 1.4.0
  * Author: Imagina
  * Author URI: https://github.com/augusto97
  * License: GPL v2 or later
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('WIT_VERSION', '1.3.1');
+define('WIT_VERSION', '1.4.0');
 define('WIT_PLUGIN_FILE', __FILE__);
 define('WIT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('WIT_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -195,10 +195,16 @@ class WPML_Imagina_Translate {
             ai_provider varchar(50) NOT NULL,
             status varchar(20) NOT NULL,
             message text,
+            input_tokens int(10) unsigned NOT NULL DEFAULT 0,
+            output_tokens int(10) unsigned NOT NULL DEFAULT 0,
+            strings_ai int(10) unsigned NOT NULL DEFAULT 0,
+            strings_memory int(10) unsigned NOT NULL DEFAULT 0,
+            strings_glossary int(10) unsigned NOT NULL DEFAULT 0,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY  (id),
             KEY post_id (post_id),
-            KEY status (status)
+            KEY status (status),
+            KEY created_at (created_at)
         ) {$collate};";
 
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';

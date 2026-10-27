@@ -21,6 +21,11 @@ function apply_filters($tag, $value)        { return $value; }
 function wp_json_encode($data, $flags = 0)  { return json_encode($data, $flags); }
 function did_action($hook)                  { return 0; } // Elementor never "loaded" here
 function wp_strip_all_tags($text)           { return trim(strip_tags(preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', (string) $text))); }
+// Enough of kses for the tests: removes scripts and event handlers, keeps formatting.
+function wp_kses_post($text) {
+    $text = preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', (string) $text);
+    return preg_replace('/\\s+on\\w+\\s*=\\s*("[^"]*"|\'[^\']*\'|[^\\s>]+)/i', '', $text);
+}
 // Deliberately NOT defined: wp_remote_post / wp_remote_request. Any attempt by
 // the engine to reach an API in these tests is a fatal error, not a pass.
 

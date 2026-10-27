@@ -5,7 +5,7 @@
 /* Dashboard Stats */
 .wit-stats {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 20px;
     margin: 20px 0 30px 0;
 }
@@ -93,6 +93,54 @@
 
 .wit-status-error {
     color: #d63638;
+}
+
+.wit-status-muted {
+    color: #646970;
+}
+
+.wit-status-label {
+    font-weight: 600;
+}
+
+.wit-badge {
+    display: inline-block;
+    margin: 2px 0 2px 6px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: #f0f0f1;
+    color: #50575e;
+    font-size: 11px;
+    line-height: 18px;
+    white-space: nowrap;
+}
+
+.wit-badge-edited {
+    background: #fcf0f1;
+    color: #8a2424;
+}
+
+.wit-status-tabs {
+    float: none;
+    margin: 4px 0 12px;
+}
+
+.wit-search-box {
+    display: flex;
+    gap: 6px;
+    margin: 0 0 14px;
+    max-width: 420px;
+}
+
+.wit-search-box input[type="search"] {
+    flex: 1;
+    min-width: 0;
+}
+
+/* Wide tables scroll inside their box instead of the whole page. */
+.wit-table-scroll {
+    overflow-x: auto;
+    max-width: 100%;
 }
 
 /* Progress Bar */
@@ -191,8 +239,32 @@
 
 /* Responsive */
 @media screen and (max-width: 782px) {
+    /* Two per row: five stacked full-width boxes pushed the content off the
+       first screen on a phone. */
     .wit-stats {
-        grid-template-columns: 1fr;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+    }
+
+    .wit-stat-box {
+        padding: 12px 8px;
+    }
+
+    .wit-stat-box h3 {
+        font-size: 22px;
+        margin-bottom: 4px;
+    }
+
+    .wit-stat-box p {
+        font-size: 12px;
+    }
+
+    .wit-search-box {
+        max-width: none;
+    }
+
+    .wit-posts-table .column-actions .button {
+        margin: 2px 4px 2px 0;
     }
 
     .wit-batch-actions {

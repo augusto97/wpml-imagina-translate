@@ -161,11 +161,17 @@ class WIT_WPML_Integration {
     /**
      * The id of an existing translation, if any.
      *
+     * A translation in the trash does not count unless asked for: WPML keeps
+     * it linked, so it used to be reported as translated and current, and
+     * re-translating wrote the new text into the trashed post — "updated
+     * successfully", and nothing on the site.
+     *
      * @param int    $post_id
      * @param string $target_language
+     * @param bool   $include_trashed
      * @return int|false
      */
-    public function get_translation_id($post_id, $target_language) {
+    public function get_translation_id($post_id, $target_language, $include_trashed = false) {
         $post_type = get_post_type($post_id);
 
         if (!$post_type) {
@@ -179,7 +185,91 @@ class WIT_WPML_Integration {
             return false;
         }
 
-        return get_post_status($translated_id) ? (int) $translated_id : false;
+        $status = get_post_status($translated_id);
+
+        if (!$status || ($status === 'trash' && !$include_trashed)) {
+            return false;
+        }
+
+        return (int) $translated_id;
+    }
+
+    /**
+     * Whether a post is the original of its translation group.
+     *
+     * The original is the post in the site's default language that no other
+     * post was translated from. WPML records the second half as
+     * source_language_code; when the hook that exposes it is unavailable, the
+     * language alone decides.
+     *
+     * @param int $post_id
+     * @return bool
+     */
+    public function is_original($post_id) {
+        if ($this->get_post_language($post_id) !== $this->get_default_language()) {
+            return false;
+        }
+
+        $details = apply_filters('wpml_element_language_details', null, array(
+            'element_id'   => (int) $post_id,
+            'element_type' => get_post_type($post_id),
+        ));
+
+        return !(is_object($details) && !empty($details->source_language_code));
+    }
+
+    /**
+     * Whether the current user may translate $post_id into $language.
+     *
+     * One gate for every path — the dashboard, the queue, the MCP tools —
+     * because the dangerous requests look like ordinary ones. Translating a
+     * TRANSLATION into the default language resolves to the original as the
+     * "existing translation", and the API path used to overwrite the original
+     * with a machine translation of its own translation. Translating into the
+     * post's own language created a second post in that language.
+     *
+     * @param int    $post_id
+     * @param string $language
+     * @return true|WP_Error
+     */
+    public function can_translate($post_id, $language) {
+        $post = get_post($post_id);
+
+        if (!$post || in_array($post->post_type, array('revision', 'attachment', 'nav_menu_item'), true)) {
+            return new WP_Error('wit_not_found', sprintf(
+                /* translators: %d: post id */
+                __('No existe ningún contenido con ID %d.', 'wpml-imagina-translate'),
+                $post_id
+            ));
+        }
+
+        if (!current_user_can('edit_post', $post_id)) {
+            return new WP_Error('wit_forbidden', __('No tienes permiso para editar este contenido.', 'wpml-imagina-translate'));
+        }
+
+        if (!$this->is_active_language($language)) {
+            return new WP_Error('wit_bad_language', sprintf(
+                /* translators: %s: language code */
+                __('"%s" no es un idioma activo en WPML.', 'wpml-imagina-translate'),
+                $language
+            ));
+        }
+
+        if ($language === $this->get_post_language($post_id)) {
+            return new WP_Error('wit_same_language', __('El idioma destino es el mismo que el del original.', 'wpml-imagina-translate'));
+        }
+
+        if (!$this->is_original($post_id)) {
+            return new WP_Error('wit_not_source', __('Este contenido ya es una traducción. Indica el original.', 'wpml-imagina-translate'));
+        }
+
+        $translation_id = $this->get_translation_id($post_id, $language, true);
+
+        if ($translation_id && !current_user_can('edit_post', $translation_id)) {
+            return new WP_Error('wit_forbidden', __('No tienes permiso para editar la traducción existente.', 'wpml-imagina-translate'));
+        }
+
+        return true;
     }
 
     // -----------------------------------------------------------------------

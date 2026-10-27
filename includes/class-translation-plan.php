@@ -135,11 +135,14 @@ class WIT_Translation_Plan {
         $engine     = new WIT_Translator_Engine();
         $unresolved = array_flip($engine->unresolved(array_keys($all), $language, $source_language));
 
+        $existing = $wpml->get_translation_id($post_id, $language);
+
         return array(
             'post_id'         => (int) $post_id,
             'title'           => get_the_title($post_id),
             'source_language' => $source_language,
-            'action'          => $wpml->get_translation_id($post_id, $language) ? 'update' : 'create',
+            'action'          => $existing ? 'update' : 'create',
+            'edited_by_hand'  => $existing ? WIT_Translation_Status::edited_by_hand($existing) : false,
             'total'           => count($all),
             'pending'         => array_intersect_key($all, $unresolved),
         );
@@ -153,46 +156,7 @@ class WIT_Translation_Plan {
      * @return true|WP_Error
      */
     private static function check_post($post_id, $language) {
-        $wpml = WIT_WPML_Integration::instance();
-        $post = get_post($post_id);
-
-        if (!$post || in_array($post->post_type, array('revision', 'attachment', 'nav_menu_item'), true)) {
-            return new WP_Error('wit_not_found', sprintf(
-                /* translators: %d: post id */
-                __('No existe ningún contenido con ID %d.', 'wpml-imagina-translate'),
-                $post_id
-            ));
-        }
-
-        if (!current_user_can('edit_post', $post_id)) {
-            return new WP_Error('wit_forbidden', __('No tienes permiso para editar este contenido.', 'wpml-imagina-translate'));
-        }
-
-        if (!$wpml->is_active_language($language)) {
-            return new WP_Error('wit_bad_language', sprintf(
-                /* translators: %s: language code */
-                __('"%s" no es un idioma activo en WPML.', 'wpml-imagina-translate'),
-                $language
-            ));
-        }
-
-        $source_language = $wpml->get_post_language($post_id);
-
-        if ($source_language !== $wpml->get_default_language()) {
-            return new WP_Error('wit_not_source', __('Este contenido ya es una traducción. Indica el original.', 'wpml-imagina-translate'));
-        }
-
-        if ($source_language === $language) {
-            return new WP_Error('wit_same_language', __('El idioma destino es el mismo que el del original.', 'wpml-imagina-translate'));
-        }
-
-        $translation_id = $wpml->get_translation_id($post_id, $language);
-
-        if ($translation_id && !current_user_can('edit_post', $translation_id)) {
-            return new WP_Error('wit_forbidden', __('No tienes permiso para editar la traducción existente.', 'wpml-imagina-translate'));
-        }
-
-        return true;
+        return WIT_WPML_Integration::instance()->can_translate($post_id, $language);
     }
 
     // -----------------------------------------------------------------------
@@ -305,7 +269,7 @@ class WIT_Translation_Plan {
                 }
             }
 
-            $posts[] = array(
+            $entry = array(
                 'post_id'       => $plan['post_id'],
                 'title'         => $plan['title'],
                 'action'        => $plan['action'],
@@ -315,6 +279,13 @@ class WIT_Translation_Plan {
                 'ready'         => empty($plan['pending']),
                 'string_ids'    => $sent_ids,
             );
+
+            if ($plan['edited_by_hand']) {
+                $entry['translation_edited_by_hand'] = true;
+                $entry['warning'] = 'Someone edited the existing translation by hand after it was made. Saving will replace those edits. Ask the user before saving; if they agree, call save_translation with overwrite_edited: true.';
+            }
+
+            $posts[] = $entry;
 
             if ($next !== null) {
                 break;
@@ -407,9 +378,11 @@ class WIT_Translation_Plan {
      * @param int[]                $post_ids
      * @param string               $language
      * @param array<string,string> $translations id => translation
+     * @param bool                 $overwrite_edited Replace a translation that
+     *                                               was edited by hand.
      * @return array|WP_Error
      */
-    public static function save(array $post_ids, $language, array $translations) {
+    public static function save(array $post_ids, $language, array $translations, $overwrite_edited = false) {
         $post_ids = array_values(array_unique(array_filter(array_map('intval', $post_ids))));
 
         if (empty($post_ids)) {
@@ -480,6 +453,17 @@ class WIT_Translation_Plan {
                     ),
                     'missing_count' => count($missing),
                     'missing'       => $list,
+                );
+                continue;
+            }
+
+            if ($plan['edited_by_hand'] && !$overwrite_edited) {
+                // Kept staged: confirming needs no strings resent.
+                set_transient($stage_key, $stage, self::STAGE_TTL);
+                $results[] = array(
+                    'post_id' => $post_id,
+                    'status'  => 'needs_confirmation',
+                    'message' => __('La traducción existente se editó a mano después de hacerse. Guardar reemplazaría esas ediciones. Pregunta al usuario; si acepta, vuelve a llamar con overwrite_edited: true (no hace falta reenviar las cadenas).', 'wpml-imagina-translate'),
                 );
                 continue;
             }

@@ -192,6 +192,18 @@ valores originales, que redirija y que un campo obligatorio vacío se rechace.
 Así se encontró el peor fallo de la 1.3.0: el formulario traducido respondía
 «Gracias, te responderemos pronto» y **no enviaba nada**.
 
+### `fixtures/audit-140.php` — la auditoría de 1.4.0
+
+Cada bloque reproduce un fallo tal como lo provocaría una persona o un chat, y
+anota qué pasa ahora. Las carreras —dos pasadas de la cola, dos canjes del
+mismo código OAuth— no se dejan al azar del reloj: un filtro `query` mete la
+petición rival justo entre la lectura y la escritura de la primera, que es el
+único momento en que la carrera existe.
+
+El proveedor falso tiene un modo `hostile` que antepone
+`<img src=x onerror=…><script>…</script>` a cada traducción, como haría un
+modelo comprometido o manipulado por el texto que traduce.
+
 ### `fixtures/reset.php`
 
 Devuelve la instalación a su estado inicial sin reconstruir WordPress. Lee los
@@ -210,6 +222,7 @@ concretos, porque la divergencia de arriba garantiza que no son los obvios.
 | **F** | MCP con un chat simulado: cadenas pedidas, guardado todo-o-nada, fidelidad, estados al día/desactualizado, correcciones, publicación, glosario, permisos por rol, y **cero llamadas a la API** |
 | **G** | MCP por HTTP con el cliente oficial: OAuth completo, herramientas, una traducción entera, y los ataques |
 | **I** | Elementor real, por API y por MCP: widgets clásicos y atómicos, ajustes técnicos intactos, render de Elementor, corrección de una frase dentro de un widget, desactualizado al editar desde Elementor |
+| **K** | Cada fallo de la auditoría 1.4.0 reproducido como comprobación: el original no se sobrescribe, un modelo hostil no guarda scripts, tokens en el historial, traducciones en la papelera, ediciones a mano protegidas, quitar traducciones y ajustes por MCP, permisos de Autor, la cola sin elementos atascados ni filas reclamadas dos veces, OAuth sin canjes dobles, y el panel paginado |
 | **J** | Elementor Pro (si se instala): siete widgets por API y por MCP, y el formulario traducido **enviado de verdad** — email, redirección y validación |
 | **H** | El formulario de ajustes por `options.php`, incluido que enviar una key vacía **no** borre la guardada |
 

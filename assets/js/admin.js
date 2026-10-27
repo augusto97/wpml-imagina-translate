@@ -110,9 +110,14 @@
             WitAdmin.updateSelectedCount();
         },
 
+        /** "%d" in a translated string, replaced. */
+        format: function(template, value) {
+            return String(template || '%d').replace('%d', value);
+        },
+
         updateSelectedCount: function() {
             const count = $('.wit-post-checkbox:checked').length;
-            $('#wit-selected-count').text(count + ' seleccionados');
+            $('#wit-selected-count').text(WitAdmin.format(witAdmin.strings.selected, count));
             $('#wit-translate-selected').prop('disabled', count === 0);
         },
 
@@ -129,7 +134,17 @@
                 return;
             }
 
-            if (!confirm(witAdmin.strings.confirm_batch)) {
+            // Translating again replaces the translation. When someone edited
+            // it by hand, say so: those edits are not recoverable afterwards.
+            const edited = $('.wit-post-checkbox:checked').filter(function() {
+                return $(this).data('edited') === 1 || $(this).data('edited') === '1';
+            }).length;
+
+            const question = edited > 0
+                ? WitAdmin.format(witAdmin.strings.confirm_edited_batch, edited)
+                : witAdmin.strings.confirm_batch;
+
+            if (!confirm(question)) {
                 return;
             }
 
@@ -190,6 +205,8 @@
          */
         pollQueue: function(batchId) {
             let lastDone = -1;
+            // Every poll returns the most recent rows again; report each once.
+            const reported = {};
 
             const tick = function() {
                 $.ajax({
@@ -212,10 +229,15 @@
 
                         if (done !== lastDone) {
                             lastDone = done;
-                            (s.recent || []).slice(0, 5).forEach(function(row) {
+                            (s.recent || []).slice().reverse().forEach(function(row) {
+                                const key = (row.id || row.post_id) + ':' + row.status;
+                                if (reported[key] || (row.status !== 'done' && row.status !== 'error')) {
+                                    return;
+                                }
+                                reported[key] = true;
                                 if (row.status === 'done') {
                                     WitAdmin.addLogEntry('✓ ' + row.title, 'success');
-                                } else if (row.status === 'error') {
+                                } else {
                                     WitAdmin.addLogEntry('✗ ' + row.title + ' — ' + row.message, 'error');
                                 }
                             });
@@ -248,6 +270,16 @@
             const targetLanguage = $button.data('target-lang');
             const $row          = $button.closest('tr');
 
+            if (String($button.data('edited')) === '1') {
+                if (!confirm(witAdmin.strings.confirm_edited)) {
+                    return;
+                }
+            } else if (String($button.data('exists')) === '1') {
+                if (!confirm(witAdmin.strings.confirm_existing)) {
+                    return;
+                }
+            }
+
             $button.addClass('wit-translating').prop('disabled', true).text(witAdmin.strings.translating);
 
             WitAdmin.translatePost(
@@ -269,22 +301,27 @@
                         $button.text('✓ ' + witAdmin.strings.success)
                                .removeClass('button-primary').addClass('button-secondary');
 
-                        const $statusCell = $row.find('td:eq(2)');
-                        $statusCell.html('<span class="wit-status-success">✓ Traducido</span>');
+                        $row.find('.column-status').empty().append(
+                            $('<span class="wit-status-label wit-status-success">').text(witAdmin.strings.translated)
+                        );
+                        // Freshly written by the plugin: no hand edits to protect.
+                        $button.data('exists', '1').data('edited', '0');
+                        $row.find('.wit-post-checkbox').data('edited', '0');
 
                         if (data.edit_url) {
                             if ($row.find('.wit-edit-translation-link').length === 0) {
                                 $('<a>')
                                     .attr('href', data.edit_url)
                                     .attr('target', '_blank')
+                                    .attr('rel', 'noopener')
                                     .addClass('button button-small wit-edit-translation-link')
-                                    .text('Editar Traducción')
-                                    .insertAfter($button);
+                                    .text(witAdmin.strings.edit_translation)
+                                    .insertAfter($button.nextAll('a').first().length ? $button.nextAll('a').first() : $button);
                             }
                         }
 
                         setTimeout(function() {
-                            $button.text('Re-Traducir')
+                            $button.text(witAdmin.strings.retranslate)
                                    .removeClass('button-secondary').addClass('button-primary');
                         }, 2000);
 
@@ -403,7 +440,12 @@
                 },
                 success: function(response) {
                     var data = (response && response.data) ? response.data : {};
-                    if (response && response.success) {
+                    if (response && response.success && data.status === 'processing') {
+                        // The same post is already being translated (another
+                        // tab, or a reload while it ran): watch that job
+                        // instead of reporting it finished.
+                        startPolling();
+                    } else if (response && response.success) {
                         done(true, data);
                     } else {
                         if (!data.message) {

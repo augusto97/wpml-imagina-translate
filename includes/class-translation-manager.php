@@ -27,12 +27,36 @@ class WIT_Translation_Manager {
      * @return array {success: bool, message: string, translated_post_id: int}
      */
     public function translate_post($post_id, $target_language) {
+        // Every engine created while this post is translated reports its
+        // tokens into one counter, read when the result is logged.
+        $previous_usage = WIT_Translator_Engine::begin_job_usage();
+
+        try {
+            return $this->run_translation($post_id, $target_language);
+        } finally {
+            WIT_Translator_Engine::end_job_usage($previous_usage);
+        }
+    }
+
+    private function run_translation($post_id, $target_language) {
         $post = get_post($post_id);
 
         if (!$post) {
             return array(
                 'success' => false,
                 'message' => __('Post no encontrado', 'wpml-imagina-translate'),
+                'translated_post_id' => 0,
+            );
+        }
+
+        // Checked here as well as at every entry point: this is the method that
+        // writes, and cron runs it with the queuing user restored.
+        $allowed = $this->wpml_integration->can_translate($post_id, $target_language);
+
+        if (is_wp_error($allowed)) {
+            return array(
+                'success'            => false,
+                'message'            => $allowed->get_error_message(),
                 'translated_post_id' => 0,
             );
         }
@@ -108,6 +132,17 @@ class WIT_Translation_Manager {
             // Check if translation already exists
             $existing_translation_id = $this->wpml_integration->get_translation_id($post_id, $target_language);
 
+            // A translation in the trash still holds WPML's slot for this
+            // language. Bring it back as a draft and update it, rather than
+            // writing into the trash or creating a second one beside it.
+            if (!$existing_translation_id) {
+                $trashed = $this->wpml_integration->get_translation_id($post_id, $target_language, true);
+                if ($trashed && get_post_status($trashed) === 'trash' && wp_untrash_post($trashed)) {
+                    $existing_translation_id = (int) $trashed;
+                    $debug_info[] = 'La traducción estaba en la papelera: restaurada como borrador';
+                }
+            }
+
             if ($existing_translation_id) {
                 // Update existing translation
                 $success = $this->wpml_integration->update_translated_post($existing_translation_id, $translated_data, $post_id);
@@ -133,7 +168,7 @@ class WIT_Translation_Manager {
                     }
 
                     WIT_Translation_Status::mark($post_id, $existing_translation_id);
-                    $this->log_translation($post_id, $target_language, 'success', 'Updated existing translation');
+                    $this->log_translation($post_id, $target_language, 'success', __('Traducción actualizada', 'wpml-imagina-translate'));
 
                     return array(
                         'success'            => true,
@@ -168,7 +203,7 @@ class WIT_Translation_Manager {
                 }
 
                 WIT_Translation_Status::mark($post_id, $new_post_id);
-                $this->log_translation($post_id, $target_language, 'success', 'Created new translation');
+                $this->log_translation($post_id, $target_language, 'success', __('Traducción creada', 'wpml-imagina-translate'));
 
                 return array(
                     'success'            => true,
@@ -256,6 +291,34 @@ class WIT_Translation_Manager {
     }
 
     /**
+     * Record something done to a translation other than translating it —
+     * published, unpublished, trashed, corrected — so the history shows what
+     * a chat did on the site, not only what it translated.
+     *
+     * @param int    $post_id         The original.
+     * @param string $target_language
+     * @param string $message
+     * @param string $via             'mcp' for actions taken from the chat.
+     */
+    public function log_event($post_id, $target_language, $message, $via = 'mcp') {
+        global $wpdb;
+
+        $wpdb->insert(
+            $wpdb->prefix . 'wit_translation_logs',
+            array(
+                'post_id'     => (int) $post_id,
+                'source_lang' => $this->wpml_integration->get_post_language($post_id),
+                'target_lang' => (string) $target_language,
+                'ai_provider' => (string) $via,
+                'status'      => 'success',
+                'message'     => (string) $message,
+                'created_at'  => current_time('mysql'),
+            ),
+            array('%d', '%s', '%s', '%s', '%s', '%s', '%s')
+        );
+    }
+
+    /**
      * Log translation
      *
      * @param int $post_id
@@ -271,45 +334,134 @@ class WIT_Translation_Manager {
         // one was paid per token, the other came out of the user's subscription.
         $ai_provider = WIT_Translator_Engine::is_external_active() ? 'mcp' : $this->settings['ai_provider'];
 
+        // Read, not ended: translate_post() closes the job.
+        $usage = WIT_Translator_Engine::job_usage_snapshot();
+
         $wpdb->insert(
             $wpdb->prefix . 'wit_translation_logs',
             array(
-                'post_id' => $post_id,
-                'source_lang' => $source_language,
-                'target_lang' => $target_language,
-                'ai_provider' => $ai_provider,
-                'status' => $status,
-                'message' => $message,
-                'created_at' => current_time('mysql'),
+                'post_id'          => $post_id,
+                'source_lang'      => $source_language,
+                'target_lang'      => $target_language,
+                'ai_provider'      => $ai_provider,
+                'status'           => $status,
+                'message'          => $message,
+                'input_tokens'     => $usage['input_tokens'],
+                'output_tokens'    => $usage['output_tokens'],
+                'strings_ai'       => $usage['api'],
+                'strings_memory'   => $usage['memory'],
+                'strings_glossary' => $usage['glossary'],
+                'created_at'       => current_time('mysql'),
             ),
-            array('%d', '%s', '%s', '%s', '%s', '%s', '%s')
+            array('%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d', '%d', '%s')
         );
     }
 
     /**
      * Get translation logs
      *
+     * Users who may not edit other people's posts see only the logs of posts
+     * they can edit: titles of others' drafts and private pages are not an
+     * Author's business.
+     *
      * @param int $limit
+     * @param int $offset
      * @return array
      */
-    public function get_translation_logs($limit = 50) {
+    public function get_translation_logs($limit = 50, $offset = 0) {
         global $wpdb;
 
-        $logs = $wpdb->get_results(
-            $wpdb->prepare(
-                "SELECT * FROM {$wpdb->prefix}wit_translation_logs ORDER BY created_at DESC LIMIT %d",
-                $limit
-            ),
-            ARRAY_A
-        );
+        $table = $wpdb->prefix . 'wit_translation_logs';
+        $all   = current_user_can('edit_others_posts');
+        $out   = array();
 
-        // Add post title to each log
-        foreach ($logs as &$log) {
-            $post = get_post($log['post_id']);
-            $log['post_title'] = $post ? $post->post_title : __('Post eliminado', 'wpml-imagina-translate');
+        // Filtered in PHP because edit_post is a meta capability; read in
+        // pages so a large history does not load at once.
+        $skip  = $all ? 0 : (int) $offset;
+        $start = $all ? (int) $offset : 0;
+        $chunk = max(50, (int) $limit);
+
+        while (count($out) < $limit) {
+            $logs = $wpdb->get_results($wpdb->prepare(
+                "SELECT * FROM {$table} ORDER BY created_at DESC, id DESC LIMIT %d OFFSET %d",
+                $chunk,
+                $start
+            ), ARRAY_A);
+
+            if (empty($logs)) {
+                break;
+            }
+
+            $start += $chunk;
+
+            foreach ($logs as $log) {
+                if (!$all && !current_user_can('edit_post', (int) $log['post_id'])) {
+                    continue;
+                }
+                if ($skip > 0) {
+                    $skip--;
+                    continue;
+                }
+
+                $post              = (int) $log['post_id'] > 0 ? get_post($log['post_id']) : null;
+                $log['post_title'] = (int) $log['post_id'] === 0
+                    ? __('(ajustes del plugin)', 'wpml-imagina-translate')
+                    : ($post ? $post->post_title : __('Post eliminado', 'wpml-imagina-translate'));
+                $log['message']    = self::readable_message($log['message']);
+                $out[]             = $log;
+
+                if (count($out) >= $limit) {
+                    break 2;
+                }
+            }
+
+            if ($all) {
+                break;
+            }
         }
 
-        return $logs;
+        return $out;
+    }
+
+    /**
+     * Number of log rows the current user can see.
+     *
+     * @return int
+     */
+    public function count_translation_logs() {
+        global $wpdb;
+
+        $table = $wpdb->prefix . 'wit_translation_logs';
+
+        if (current_user_can('edit_others_posts')) {
+            return (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
+        }
+
+        // One row per post, not per log line: a long history has far more
+        // lines than posts.
+        $count = 0;
+        foreach ((array) $wpdb->get_results("SELECT post_id, COUNT(*) AS n FROM {$table} GROUP BY post_id", ARRAY_A) as $row) {
+            if ((int) $row['post_id'] > 0 && current_user_can('edit_post', (int) $row['post_id'])) {
+                $count += (int) $row['n'];
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * Messages written in English by versions before 1.4.0.
+     *
+     * @param string $message
+     * @return string
+     */
+    private static function readable_message($message) {
+        $legacy = array(
+            'Created new translation'      => __('Traducción creada', 'wpml-imagina-translate'),
+            'Updated existing translation' => __('Traducción actualizada', 'wpml-imagina-translate'),
+        );
+
+        return isset($legacy[$message]) ? $legacy[$message] : (string) $message;
     }
 
     /**
@@ -343,11 +495,20 @@ class WIT_Translation_Manager {
             ARRAY_A
         );
 
-        // Recent activity (last 7 days)
+        // Recent activity (last 7 days). created_at is the site's local time.
         $stats['recent'] = $wpdb->get_var(
             $wpdb->prepare(
                 "SELECT COUNT(*) FROM {$wpdb->prefix}wit_translation_logs WHERE created_at >= %s",
-                date('Y-m-d H:i:s', strtotime('-7 days'))
+                gmdate('Y-m-d H:i:s', current_time('timestamp') - 7 * DAY_IN_SECONDS)
+            )
+        );
+
+        // Tokens billed by the API over the last 30 days: what the provider
+        // charges for. Translations made through Claude count zero.
+        $stats['tokens_30d'] = (int) $wpdb->get_var(
+            $wpdb->prepare(
+                "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) FROM {$wpdb->prefix}wit_translation_logs WHERE created_at >= %s",
+                gmdate('Y-m-d H:i:s', current_time('timestamp') - 30 * DAY_IN_SECONDS)
             )
         );
 

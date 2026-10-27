@@ -534,8 +534,9 @@ class WIT_OAuth {
         if ($type && current_user_can($type->cap->publish_posts)) {
             $can[] = __('Publicar traducciones cuando se lo pidas', 'wpml-imagina-translate');
         }
+        $can[] = __('Quitar traducciones cuando se lo pidas: despublicarlas o enviarlas a la papelera (recuperables; nunca se borran del todo)', 'wpml-imagina-translate');
         if (current_user_can('manage_options')) {
-            $can[] = __('Editar el glosario de traducción', 'wpml-imagina-translate');
+            $can[] = __('Editar el glosario y los ajustes de traducción (memoria, campos a traducir)', 'wpml-imagina-translate');
         }
 
         status_header(200);
@@ -691,7 +692,20 @@ class WIT_OAuth {
 
         // Single use from here on, whatever happens next: a code that failed
         // a check is burned rather than left open to further attempts.
-        $wpdb->update(self::table('tokens'), array('used' => 1), array('id' => $row->id));
+        //
+        // Conditional on used = 0, and the change counted: two requests with
+        // the same code could otherwise both read "unused" and both get
+        // tokens. Only the request whose UPDATE flipped the flag goes on; the
+        // other is a replay and is treated as one.
+        $burned = $wpdb->query($wpdb->prepare(
+            'UPDATE ' . self::table('tokens') . ' SET used = 1 WHERE id = %d AND used = 0',
+            (int) $row->id
+        ));
+
+        if ((int) $burned !== 1) {
+            $this->revoke_grant($row->grant_id);
+            return $this->oauth_error('invalid_grant', 'Authorization code already used.', 400);
+        }
 
         if ($redirect !== $row->redirect_uri) {
             return $this->oauth_error('invalid_grant', 'redirect_uri does not match.', 400);
@@ -744,8 +758,18 @@ class WIT_OAuth {
         }
 
         // Rotation: the old refresh token dies in the same response that
-        // issues the new one.
-        $wpdb->update(self::table('tokens'), array('revoked' => 1), array('id' => $row->id));
+        // issues the new one — and only one request gets to kill it. A thief
+        // racing the legitimate client with the same token would otherwise
+        // get its own fresh pair and slip past the reuse detection above.
+        $rotated = $wpdb->query($wpdb->prepare(
+            'UPDATE ' . self::table('tokens') . ' SET revoked = 1 WHERE id = %d AND revoked = 0',
+            (int) $row->id
+        ));
+
+        if ((int) $rotated !== 1) {
+            $this->revoke_grant($row->grant_id);
+            return $this->oauth_error('invalid_grant', 'Refresh token already used.', 400);
+        }
 
         // Earlier access tokens of this grant are superseded as well.
         $wpdb->update(
