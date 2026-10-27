@@ -33,6 +33,10 @@ DB_SOCKET="${WIT_DB_SOCKET:-/tmp/wit-mysql.sock}"
 # is not root, so ask the system who we are instead of assuming.
 DB_USER="${WIT_DB_USER:-$(id -un)}"
 
+# Where the throwaway server keeps its data. Overridable because some hosts
+# confine mariadbd (AppArmor) to a few directories, /tmp usually among them.
+DB_DATADIR="${WIT_DB_DATADIR:-$TEST_DIR/mysql}"
+
 WWW="$TEST_DIR/www"
 CACHE="$TEST_DIR/cache"
 
@@ -82,19 +86,21 @@ WP="$TEST_DIR/wp"
 
 # --- MariaDB -----------------------------------------------------------------
 say "Arrancando MariaDB en el puerto $DB_PORT"
-mkdir -p "$(dirname "$DB_SOCKET")" "$TEST_DIR/mysql"
-if [ ! -d "$TEST_DIR/mysql/mysql" ]; then
+mkdir -p "$(dirname "$DB_SOCKET")" "$DB_DATADIR"
+if [ ! -d "$DB_DATADIR/mysql" ]; then
   # --no-defaults: this throwaway server must not read the system's
   # /etc/mysql. On Ubuntu 26.04 runners MySQL 8.4 is preinstalled and replaced
   # by MariaDB, and what it leaves there is not MariaDB's to parse. Output is
   # kept, not discarded: "it failed" alone is not something one can fix.
-  mariadb-install-db --no-defaults --user="$DB_USER" --datadir="$TEST_DIR/mysql" \
+  mariadb-install-db --no-defaults --user="$DB_USER" --datadir="$DB_DATADIR" \
     --auth-root-authentication-method=normal >"$TEST_DIR/mysql-install.log" 2>&1 \
-    || { tail -30 "$TEST_DIR/mysql-install.log" >&2; die "mariadb-install-db falló"; }
+    || { grep -iE "error|denied|cannot|can't|unknown" "$TEST_DIR/mysql-install.log" | head -20 >&2
+         head -15 "$TEST_DIR/mysql-install.log" >&2
+         die "mariadb-install-db falló"; }
 fi
 
 if ! mariadb --socket="$DB_SOCKET" -uroot -e "SELECT 1" >/dev/null 2>&1; then
-  nohup mariadbd --no-defaults --user="$DB_USER" --datadir="$TEST_DIR/mysql" --socket="$DB_SOCKET" \
+  nohup mariadbd --no-defaults --user="$DB_USER" --datadir="$DB_DATADIR" --socket="$DB_SOCKET" \
     --port="$DB_PORT" --bind-address=127.0.0.1 \
     --pid-file="$TEST_DIR/mysql.pid" --log-error="$TEST_DIR/mysql.err" >/dev/null 2>&1 &
   for _ in $(seq 1 30); do

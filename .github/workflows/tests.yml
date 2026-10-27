@@ -78,6 +78,7 @@ jobs:
       # Short and always writable: the kernel caps a UNIX socket path at 107
       # characters, and the runner is not root so /run/mysqld is out.
       WIT_DB_SOCKET: /tmp/wit-mysql.sock
+      WIT_DB_DATADIR: /tmp/wit-mysql-data
 
     steps:
       - uses: actions/checkout@v4
@@ -109,9 +110,10 @@ jobs:
           # Ubuntu's AppArmor profile confines mariadbd to /var/lib/mysql, and
           # the test instance keeps its data in the workspace. Relax it for
           # this throwaway runner only.
-          if [ -f /etc/apparmor.d/usr.sbin.mariadbd ]; then
-            sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.mariadbd 2>/dev/null || true
-          fi
+          # Ubuntu 26.04 names the profile after the binary alone.
+          for profile in /etc/apparmor.d/usr.sbin.mariadbd /etc/apparmor.d/mariadbd /etc/apparmor.d/usr.sbin.mysqld /etc/apparmor.d/mysqld; do
+            [ -f "$profile" ] && sudo apparmor_parser -R "$profile" 2>/dev/null && echo "AppArmor: $profile descargado"
+          done
           mariadbd --version
 
       - name: Cachear WordPress y wp-cli
@@ -135,6 +137,9 @@ jobs:
           tail -40 "$WIT_TEST_DIR/php-server.log" 2>/dev/null || echo "(sin log)"
           echo "=== MariaDB ==="
           tail -40 "$WIT_TEST_DIR/mysql.err" 2>/dev/null || echo "(sin log)"
+          echo "=== instalación de MariaDB ==="
+          cat "$WIT_TEST_DIR/mysql-install.log" 2>/dev/null || echo "(sin log)"
+          sudo dmesg 2>/dev/null | grep -i apparmor | tail -10 || true
           echo "=== cadenas enviadas a la API ==="
           tail -20 "$WIT_TEST_DIR/www/wp-content/wit-ai-requests.log" 2>/dev/null || echo "(ninguna)"
           echo "=== cliente MCP ==="
