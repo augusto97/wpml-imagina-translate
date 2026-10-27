@@ -106,6 +106,13 @@ jobs:
           # setup.sh starts its own instance with its own datadir; the packaged
           # service would only compete for the port.
           sudo systemctl stop mariadb 2>/dev/null || true
+          # Ubuntu's AppArmor profile confines mariadbd to /var/lib/mysql, and
+          # the test instance keeps its data in the workspace. Relax it for
+          # this throwaway runner only.
+          if [ -f /etc/apparmor.d/usr.sbin.mariadbd ]; then
+            sudo apparmor_parser -R /etc/apparmor.d/usr.sbin.mariadbd 2>/dev/null || true
+          fi
+          mariadbd --version
 
       - name: Cachear WordPress y wp-cli
         uses: actions/cache@v4

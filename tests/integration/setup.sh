@@ -84,13 +84,17 @@ WP="$TEST_DIR/wp"
 say "Arrancando MariaDB en el puerto $DB_PORT"
 mkdir -p "$(dirname "$DB_SOCKET")" "$TEST_DIR/mysql"
 if [ ! -d "$TEST_DIR/mysql/mysql" ]; then
-  mariadb-install-db --user="$DB_USER" --datadir="$TEST_DIR/mysql" \
-    --auth-root-authentication-method=normal >/dev/null 2>&1 \
-    || die "mariadb-install-db falló"
+  # --no-defaults: this throwaway server must not read the system's
+  # /etc/mysql. On Ubuntu 26.04 runners MySQL 8.4 is preinstalled and replaced
+  # by MariaDB, and what it leaves there is not MariaDB's to parse. Output is
+  # kept, not discarded: "it failed" alone is not something one can fix.
+  mariadb-install-db --no-defaults --user="$DB_USER" --datadir="$TEST_DIR/mysql" \
+    --auth-root-authentication-method=normal >"$TEST_DIR/mysql-install.log" 2>&1 \
+    || { tail -30 "$TEST_DIR/mysql-install.log" >&2; die "mariadb-install-db falló"; }
 fi
 
 if ! mariadb --socket="$DB_SOCKET" -uroot -e "SELECT 1" >/dev/null 2>&1; then
-  nohup mariadbd --user="$DB_USER" --datadir="$TEST_DIR/mysql" --socket="$DB_SOCKET" \
+  nohup mariadbd --no-defaults --user="$DB_USER" --datadir="$TEST_DIR/mysql" --socket="$DB_SOCKET" \
     --port="$DB_PORT" --bind-address=127.0.0.1 \
     --pid-file="$TEST_DIR/mysql.pid" --log-error="$TEST_DIR/mysql.err" >/dev/null 2>&1 &
   for _ in $(seq 1 30); do
