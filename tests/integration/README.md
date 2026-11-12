@@ -34,7 +34,8 @@ al terminar.
 - Un servidor MariaDB o MySQL instalado (no hace falta que esté arrancado;
   `setup.sh` levanta su propia instancia con su propio *datadir*)
 - `curl`, `unzip`, `git`, `python3`
-- Node 18+ y npm, para el cliente MCP de la sección G (`run.sh` ejecuta `npm ci` en `client/` si hace falta)
+- Node 18+ y npm, para el cliente MCP de la sección G (`run.sh` ejecuta `npm ci` en `client/` si hace falta) y para compilar la interfaz (`setup.sh` lo hace si falta `assets/app`)
+- Para la sección M, Playwright con su Chromium (`npm i -g playwright && npx playwright install chromium`). Sin él, M se omite en local y avisa; en CI es obligatorio
 
 En Debian/Ubuntu: `apt-get install -y mariadb-server php-cli php-mysql curl unzip git`
 
@@ -236,15 +237,16 @@ concretos, porque la divergencia de arriba garantiza que no son los obvios.
 | **A** | Los tres modos hostiles del proveedor: el contenido se traduce entero y el título queda limpio |
 | **B** | Fidelidad del contenido: entidades, `nbsp`, clases y URLs intactas, `alt` traducido en los dos sitios, shortcode intacto, 10 bloques válidos, campos copiados, meta interna **no** copiada, imagen destacada, borrador, memoria reutilizada, glosario, y la ida y vuelta de la taxonomía |
 | **C** | La cola drenando **sin usuario actual**, como la ejecuta WP-Cron |
-| **D** | Las cinco pantallas de administración por HTTP real, más la redirección de la URL antigua |
-| **E** | Los ocho endpoints AJAX, más los tres casos que **deben** rechazarse: nonce inválido, idioma inexistente, sin sesión |
+| **D** | Las pantallas por HTTP real: cada una imprime su punto de montaje, carga su bundle como módulo y su configuración; y la redirección de la URL antigua |
+| **E** | La API REST del panel (`wit/admin/v1`) entera: resumen, listado con filtros, traducir, estado del trabajo, revisión, corregir, publicar, despublicar, cola (con su estado «en cola» en el listado), historial, ajustes **sin la API key** en la respuesta, modelos, conexión, memoria; y lo que **debe** rechazarse: idioma inexistente, sin nonce, nonce inválido, anónimo, nonce robado sin su cookie |
 | **F** | MCP con un chat simulado: cadenas pedidas, guardado todo-o-nada, fidelidad, estados al día/desactualizado, correcciones, publicación, glosario, permisos por rol, y **cero llamadas a la API** |
 | **G** | MCP por HTTP con el cliente oficial: OAuth completo, herramientas, una traducción entera, y los ataques |
 | **I** | Elementor real, por API y por MCP: widgets clásicos y atómicos, ajustes técnicos intactos, render de Elementor, corrección de una frase dentro de un widget, desactualizado al editar desde Elementor |
-| **L** | Con WPML real: WPML registra nuestras traducciones y las marca «necesita actualización»; campos y taxonomías según la configuración de WPML; ajustes de WPML por MCP; cadenas de String Translation por API y por MCP —marcadores, HTML, el `%s` suelto— y, en una petición real a la web, la cadena del tema traducida |
-| **K** | Cada fallo de la auditoría 1.4.0 reproducido como comprobación: el original no se sobrescribe, un modelo hostil no guarda scripts, tokens en el historial, traducciones en la papelera, ediciones a mano protegidas, quitar traducciones y ajustes por MCP, permisos de Autor, la cola sin elementos atascados ni filas reclamadas dos veces, OAuth sin canjes dobles, y el panel paginado |
+| **L** | Con WPML real: WPML registra nuestras traducciones y las marca «necesita actualización»; campos y taxonomías según la configuración de WPML; ajustes de WPML por MCP; cadenas de String Translation por API y por MCP —marcadores, HTML, el `%s` suelto— y, en una petición real a la web, la cadena del tema traducida; la pantalla Cadenas por su API: dominios, traducción a mano con sus marcadores, y un formato de fecha que se guarda tal cual sin pasar por la IA |
+| **K** | Cada fallo de la auditoría 1.4.0 reproducido como comprobación: el original no se sobrescribe, un modelo hostil no guarda scripts, tokens en el historial, traducciones en la papelera, ediciones a mano protegidas, quitar traducciones y ajustes por MCP, permisos de Autor, la cola sin elementos atascados ni filas reclamadas dos veces, OAuth sin canjes dobles, el listado paginado y la búsqueda por la API, y como Autor: Historial sin borradores ajenos, ajustes y conexiones prohibidos |
 | **J** | Elementor Pro (si se instala): siete widgets por API y por MCP, y el formulario traducido **enviado de verdad** — email, redirección y validación |
-| **H** | El formulario de ajustes por `options.php`, incluido que enviar una key vacía **no** borre la guardada |
+| **M** | Las pantallas en un Chromium de verdad (Playwright): todas montan sin errores de JavaScript ni de la API; traducir una fila con un clic, revisarla junto al original, guardar un ajuste y ver que persiste; Cadenas con WPML real; y en un iPhone, sin desplazamiento lateral |
+| **H** | Guardar ajustes como lo hace la pantalla: solo lo que cambió, una key vacía **no** borra la guardada, quitar una key es explícito, la lista de campos se sanea, y la respuesta nunca devuelve la key |
 
 En WordPress anterior a 6.9, F y G se sustituyen por la comprobación de que el
 endpoint MCP no existe y de que Ajustes explica el requisito. CI ejecuta la
@@ -290,9 +292,23 @@ ya está en memoria, no llega a la API y el modo hostil que se quería probar no
 se ejercita — el test pasa sin haber comprobado nada. `run.sh` vacía la memoria
 antes de cada modo.
 
-**La página de administración lleva varios `"nonce"`.** El del plugin está
-dentro de su propio objeto `witAdmin`; coger el primero que aparece devuelve el
-de WordPress y todos los endpoints responden *"Error de seguridad"*.
+**La página de administración lleva varios `"nonce"`.** El de la API del panel
+está dentro de `witConfig`; coger el primero que aparece devuelve otro y todas
+las peticiones responden 403.
+
+**`wp_localize_script` convierte los booleanos de primer nivel en texto.**
+`canManage: false` llega a la app como `""` (y `true` como `"1"`). Para
+JavaScript sigue siendo falso o verdadero; para un `grep` del HTML, no.
+
+**Con varios workers, la cola se vacía antes de poder mirarla.** WP-Cron se
+dispara en paralelo y el elemento recién encolado ya está traducido en la
+petición siguiente. `fixtures/wit-test-hooks.php` añade un interruptor
+(`wit_test_hold_cron`) que la sección E activa mientras comprueba el estado «en
+cola».
+
+**WPML usa `?lang=` en el admin.** Es su selector de idioma: una pantalla del
+plugin con `?lang=fr` en la URL cambiaba el idioma del admin de WPML (y la URL
+de la API pasaba a `/fr/wp-json/`). Las pantallas usan `?to=`.
 
 **`pkill -f <patrón>` se mata a sí mismo** si el patrón aparece en la línea de
 comandos de quien lo lanza. Ancla el patrón al inicio (`^php -S …`) o mata por
@@ -313,8 +329,8 @@ Conviene tenerlo claro antes de fiarse de un resultado en verde:
   funcionar uno a uno.
 - **Elementor Pro en CI.** Solo se prueba en local, con tu ZIP.
 - **WPML real.** Ver arriba.
-- **El navegador.** El JavaScript no se ejecuta: se comprueba que el marcado
-  que necesita está presente, no que la interfaz funcione.
+- **Todos los navegadores.** La sección M usa Chromium; Firefox y Safari no se
+  prueban.
 - **Modelos reales.** El proveedor falso obedece el protocolo mejor que un
   modelo real en un mal día.
 - **Concurrencia.** El bloqueo de la cola no se prueba con dos pasadas

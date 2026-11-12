@@ -354,6 +354,31 @@ class WIT_Queue {
     // -----------------------------------------------------------------------
 
     /**
+     * Posts waiting or being translated into a language, so a list can show
+     * them as queued instead of offering to translate them a second time.
+     *
+     * @param string $target_language
+     * @return array<int,string> post ID => pending|processing
+     */
+    public function queued_posts($target_language) {
+        global $wpdb;
+
+        $rows = $wpdb->get_results($wpdb->prepare(
+            'SELECT post_id, status FROM ' . self::table() . ' WHERE target_lang = %s AND status IN (%s, %s)',
+            (string) $target_language,
+            self::STATUS_PENDING,
+            self::STATUS_PROCESSING
+        ), ARRAY_A);
+
+        $out = array();
+        foreach ((array) $rows as $row) {
+            $out[(int) $row['post_id']] = (string) $row['status'];
+        }
+
+        return $out;
+    }
+
+    /**
      * @return int
      */
     public function count_pending() {

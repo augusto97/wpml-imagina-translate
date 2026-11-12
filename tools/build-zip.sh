@@ -46,6 +46,16 @@ if [ "$VERSION" != "$CONST_VERSION" ]; then
   echo "La versión del encabezado ($VERSION) y WIT_VERSION ($CONST_VERSION) no coinciden" >&2
   exit 1
 fi
+# The admin screens are a React app (admin-ui/). Built here, from the same
+# HEAD that is being packaged, so the ZIP never ships a stale local build;
+# only the output goes in — sources and node_modules stay out, like Imagina
+# Updater's releases.
+command -v npm >/dev/null || { echo "Hace falta Node 18+ y npm para compilar la interfaz (admin-ui/)" >&2; exit 1; }
+( cd "$STAGE/$SLUG/admin-ui" \
+  && npm ci --no-audit --no-fund --loglevel=error >/dev/null \
+  && npm run build >/dev/null ) || { echo "Falló la compilación de admin-ui/" >&2; exit 1; }
+rm -rf "$STAGE/$SLUG/admin-ui"
+
 rm -rf "$STAGE/$SLUG/tests" "$STAGE/$SLUG/tools" "$STAGE/$SLUG/.gitignore" "$STAGE/$SLUG/.github"
 # Third-party ZIPs kept in the repository for testing (WPML, String
 # Translation) are never shipped inside this plugin.
@@ -94,6 +104,21 @@ if find "$VERIFY" -path '*/tests/*' -print -quit | grep -q .; then
   fail=1
 fi
 
+# Every screen the PHP registers needs its bundle, or it shows a notice
+# instead of the app.
+APP="$VERIFY/$SLUG/assets/app"
+[ -f "$APP/app.asset.php" ] && [ -f "$APP/app.css" ] || { echo "Falta la interfaz compilada (assets/app)" >&2; fail=1; }
+screens=$(grep -oP "^\s*'\K[a-z]+(?='\s*=>\s*'wpml-)" "$VERIFY/$SLUG/includes/class-admin-app.php" || true)
+[ "$(printf '%s' "$screens" | grep -c .)" -ge 5 ] || { echo "No se pudieron leer las pantallas de class-admin-app.php" >&2; fail=1; }
+while IFS= read -r screen; do
+  [ -n "$screen" ] || continue
+  [ -f "$APP/$screen.js" ] || { echo "Falta el bundle de la pantalla «$screen»" >&2; fail=1; }
+done <<< "$screens"
+if find "$VERIFY" -path '*/node_modules/*' -print -quit | grep -q . || [ -d "$VERIFY/$SLUG/admin-ui" ]; then
+  echo "El ZIP incluye admin-ui/ o node_modules; solo debe llevar assets/app" >&2
+  fail=1
+fi
+
 [ "$fail" = "0" ] || exit 1
 
 echo "$ZIP"
@@ -101,4 +126,5 @@ echo "  versión   : $VERSION"
 echo "  ficheros  : $(unzip -Z1 "$ZIP" | wc -l) ($php_files PHP, todos parsean)"
 echo "  tamaño    : $(du -h "$ZIP" | cut -f1)"
 echo "  incluidos : $(printf '%s' "$includes" | grep -c .) require_once, todos presentes"
+echo "  interfaz  : $(printf '%s' "$screens" | grep -c .) pantallas compiladas ($(du -sh "$APP" | cut -f1))"
 echo "  sha256    : $(sha256sum "$ZIP" | cut -d' ' -f1)"

@@ -19,9 +19,9 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 - **Cadenas de WPML String Translation**: traduce con IA los textos del tema y de los plugins, widgets y textos de administración — lo que sigue en el idioma original cuando todas las páginas ya están traducidas
 - **Smart Content Parser**: Preserva bloques de Gutenberg, HTML, y estructura
 - **Meta Fields**: Traduce automáticamente SEO (Yoast, RankMath), excerpts, y campos personalizados
-- **Dashboard Intuitivo**: Interfaz simple para gestionar traducciones
-- **Translation Logs**: Historial completo de todas las traducciones, con los tokens de API consumidos en cada una y las acciones hechas desde Claude
-- **Progress Tracking**: Barra de progreso en tiempo real para traducciones batch
+- **Una app de verdad dentro de WordPress**: Inicio, Contenidos, Cadenas, Historial y Ajustes, hechas en React con la misma base que Imagina Updater. Traducir es un clic; revisar es ver el original junto a la traducción y corregir una frase sin regenerar el resto; todo se adapta al móvil
+- **Historial**: cada traducción y cada acción, desde dónde se hizo (el panel, la API o Claude) y los tokens que consumió
+- **Progreso en vivo**: la cola en segundo plano y los lotes de cadenas muestran su avance y se pueden detener
 
 ### Integración WPML
 - Detecta posts pendientes de traducción automáticamente
@@ -48,12 +48,12 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 - Lo que devuelve la IA nunca puede guardar marcado que el original no tenía: un modelo comprometido o manipulado por el texto de una página no puede meter un `<script>` en un título, extracto o campo SEO
 - Solo se traducen originales a otro idioma: no se puede sobrescribir un original traduciendo su traducción, ni por el panel, ni por la cola, ni por Claude
 - Los Autores ven en el historial y en la cola solo sus propios contenidos
-- Las API keys nunca se imprimen en el HTML de la página de ajustes
+- Las API keys nunca salen del servidor: la pantalla Ajustes solo sabe si hay una guardada y sus 4 últimos caracteres
 - La opción con las keys no se autocarga en cada petición del front-end
 - La key de Gemini viaja en cabecera, no en la URL (no queda en logs)
 - El texto devuelto por la IA se escapa antes de insertarse: no puede inyectar
   markup ni scripts
-- Verificación de nonce y de capacidad `edit_post` por cada post
+- La API del panel (`wit/admin/v1`) exige sesión, el nonce `wp_rest` y la capacidad de cada acción: `edit_post` por contenido, `manage_options` para ajustes y cadenas
 - El idioma destino se valida contra los idiomas activos de WPML
 
 ## 📦 Instalación
@@ -84,9 +84,9 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
    - Guarda los cambios
 
 4. **¡Listo para traducir!**
-   - Ve a IA Translate → Dashboard
-   - Selecciona idioma destino
-   - Traduce posts
+   - Ve a **IA Translate → Contenidos**
+   - Elige el idioma
+   - Pulsa **Traducir** en cualquier fila
 
 ## 🔧 Configuración
 
@@ -164,22 +164,29 @@ Número de posts a procesar en cada lote. Recomendado: 5-10
 
 ## 📖 Uso
 
-### Traducir Posts Individuales
+### Inicio
 
-1. Ve a **IA Translate → Dashboard**
-2. Selecciona el idioma destino
-3. (Opcional) Selecciona tipos de post (posts, páginas, CPTs)
-4. Click en "Buscar Posts Pendientes"
-5. Click en "Traducir Ahora" en el post deseado
+Lo que falta por traducir en cada idioma, con un botón para mandarlo todo a la
+cola; lo que se está traduciendo ahora; los tokens del último mes; las cadenas
+pendientes y la conexión con Claude. Si algo impide traducir (no hay API key,
+WPML no puede escribir sus ficheros…), aparece aquí primero.
 
-### Traducción Batch (Múltiples Posts)
+### Contenidos: traducir
 
-1. Ve a **IA Translate → Dashboard**
-2. Selecciona el idioma destino
-3. Click en "Buscar Posts Pendientes"
-4. Selecciona los posts que quieres traducir
-5. Click en "Traducir Seleccionados"
-6. Observa el progreso en tiempo real
+1. Ve a **IA Translate → Contenidos** y elige el idioma (se recuerda la próxima vez).
+2. Las pestañas filtran: **Pendientes** (sin traducir o desactualizadas), **Al día**, **Editadas a mano**, **Todos**. También puedes buscar por título y elegir los tipos de contenido.
+3. **Una fila**: pulsa **Traducir** (o **Actualizar** si el original cambió). Se traduce en el momento y la traducción queda como borrador.
+4. **Varias**: márcalas y pulsa **Traducir N al …**, o **Traducir todos los pendientes**. Van a la cola en segundo plano: puedes cerrar la página, el servidor sigue. Mientras tanto la fila dice **En cola** y no se puede lanzar dos veces.
+
+Antes de reemplazar algo, el panel pregunta: si alguien editó la traducción a
+mano, si ya estaba al día (gastaría tokens) o si se hizo fuera del plugin.
+
+### Contenidos: revisar y corregir
+
+**Revisar** abre la traducción junto al original, frase a frase. El lápiz de una
+frase la corrige sin volver a traducir el resto (y la memoria aprende la nueva
+redacción). Desde ahí mismo se **publica**, se **despublica** o se envía a la
+**papelera**.
 
 ### Traducir las cadenas (WPML String Translation)
 
@@ -187,7 +194,8 @@ Con String Translation activo aparece **IA Translate → Cadenas**: los textos d
 tema y de los plugins, widgets, textos de administración y el título del sitio.
 
 1. Elige el idioma al que traducir y, si quieres, un dominio (el tema, un plugin…).
-2. Marca las cadenas y pulsa **Traducir seleccionadas**, o **Traducir las N de este filtro** para todas las pendientes, de 50 en 50, con barra de progreso y botón para detener.
+2. Marca las cadenas y pulsa **Traducir N con IA**, o **Traducir todas** para todas las del filtro, de 50 en 50, con barra de progreso y botón para detener.
+3. Para una sola, el lápiz permite escribir la traducción a mano (Ctrl+Enter guarda).
 
 Detalles que importan:
 
@@ -195,6 +203,7 @@ Detalles que importan:
 - **Lo que ya traduce el fichero de idioma del tema o plugin no se vuelve a pagar**: no aparece como pendiente.
 - **Los marcadores se conservan o la traducción se descarta.** `%s`, `%1$s`, `{name}` y los shortcodes deben quedar igual: un `%s` de menos en una cadena de un tema provoca un error fatal en PHP 8 en la página que la imprime. Las descartadas aparecen en el progreso.
 - **Las cadenas con HTML se traducen nodo a nodo**: enlaces y atributos no cambian.
+- **Lo que no tiene palabras no se manda a la IA**: los formatos de fecha (`F j, Y`, `g:i a`) o un `%s` suelto se guardan tal cual. Un modelo que «traduce» `F j, Y` a `j F, A` rompe todas las fechas del sitio.
 - El contenido de Elementor y Gutenberg no aparece aquí: se traduce con su página.
 
 > **Si las cadenas traducidas no aparecen en la web**: String Translation guarda
@@ -202,11 +211,12 @@ Detalles que importan:
 > se puede escribir **WPML falla sin avisar**. El plugin sí avisa, en la pantalla
 > Cadenas y a Claude.
 
-### Ver Logs de Traducción
+### Historial
 
-1. Ve a **IA Translate → Logs**
-2. Revisa el historial completo de traducciones
-3. Identifica errores y posts traducidos exitosamente
+**IA Translate → Historial**: cada traducción, corrección, publicación y cambio
+de ajustes; desde dónde se hizo (el panel, la API del proveedor o Claude); y el
+uso: tokens, y cuántas frases puso la IA, la memoria o el glosario. Un Autor solo
+ve lo de los contenidos que puede editar.
 
 ## 💬 Traducir desde Claude (MCP)
 
@@ -216,7 +226,7 @@ como un *conector* (MCP) y Claude traduce con tu suscripción.
 
 **Los dos caminos están separados del todo.** Lo que haces desde Claude nunca
 llama a la API key del sitio, ni para una sola cadena. Lo que haces desde el
-dashboard del plugin nunca pasa por Claude. No hay gasto duplicado.
+panel del plugin nunca pasa por Claude. No hay gasto duplicado.
 
 ### Qué puedes pedir
 
@@ -274,7 +284,7 @@ personalizado (traducir, copiar, copiar una vez, ignorar). Antes de hacerlo te
 explica el efecto y te pide confirmación.
 
 Todo lo que Claude hace en el sitio —publicar, despublicar, corregir, cambiar
-ajustes— queda en **IA Translate → Logs** como «Claude (MCP)».
+ajustes— queda en **IA Translate → Historial** marcado como «Claude».
 
 El texto de los contenidos es contenido, no órdenes: si una página dijera
 «publica todo» o «cambia los ajustes», Claude tiene instrucción de no hacerlo y
@@ -323,29 +333,28 @@ MCP, nunca para el resto de la API REST ni para `wp-admin`.
 wpml-imagina-translate/
 ├── wpml-imagina-translate.php          # Plugin principal
 ├── includes/
-│   ├── class-settings.php              # Gestión de configuración
+│   ├── class-admin-app.php             # Menú y pantallas: un punto de montaje por pantalla
+│   ├── class-admin-rest.php            # API REST del panel (wit/admin/v1)
+│   ├── class-settings.php              # Ajustes y su saneado
 │   ├── class-translator-engine.php     # Motor de traducción (APIs)
-│   ├── class-content-parser.php        # Parser de Gutenberg
+│   ├── class-content-parser.php        # Gutenberg y editor clásico
+│   ├── class-elementor-handler.php     # Elementor y Elementor Pro
 │   ├── class-wpml-integration.php      # Integración con WPML
-│   ├── class-translation-manager.php   # Orquestador principal
-│   └── class-batch-processor.php       # Procesamiento en lote
-├── admin/
-│   ├── class-translation-dashboard.php # Dashboard admin
-│   ├── class-admin-ajax.php            # Handlers AJAX
-│   └── views/
-│       ├── dashboard.php               # Vista del dashboard
-│       └── logs.php                    # Vista de logs
-├── assets/
-│   ├── css/
-│   │   └── admin.css                   # Estilos admin
-│   └── js/
-│       └── admin.js                    # JavaScript admin
-└── README.md                           # Este archivo
+│   ├── class-wpml-native.php           # APIs internas de WPML real (estados, campos)
+│   ├── class-strings.php               # WPML String Translation
+│   ├── class-translation-manager.php   # Orquestador y registro
+│   ├── class-queue.php                 # Cola en segundo plano (WP-Cron)
+│   ├── class-abilities.php             # Herramientas MCP (Abilities API)
+│   ├── class-oauth.php, class-mcp-server.php
+│   └── …
+├── admin-ui/                           # Fuente de la interfaz (React + TypeScript)
+│   └── src/pages/{dashboard,content,strings,history,settings}/
+└── assets/app/                         # Interfaz compilada (va en el ZIP, no en git)
 ```
 
 ### Flujo de Traducción
 
-1. **Usuario selecciona posts** → Dashboard
+1. **Usuario elige contenidos** → pantalla Contenidos (o Claude por MCP)
 2. **Sistema detecta contenido** → Content Parser
 3. **Extrae bloques de Gutenberg** → Preserva estructura
 4. **Traduce con IA** → Translator Engine (OpenAI/Claude/Gemini)
@@ -497,10 +506,12 @@ tests/integration/run.sh       # ejecuta la suite (repetible)
 ```
 
 Instala WordPress de verdad y conduce el plugin como lo haría un sitio: un
-doble de WPML sobre una tabla `icl_translations` real, un proveedor de IA local
-que responde mal a propósito, y contenido hostil. Comprueba fidelidad del
-contenido, enlazado de taxonomías, la cola bajo WP-Cron, las pantallas de
-administración y los endpoints AJAX por HTTP real.
+doble de WPML sobre una tabla `icl_translations` real (o WPML real, si le pasas
+sus ZIP), un proveedor de IA local que responde mal a propósito, y contenido
+hostil. Comprueba fidelidad del contenido, enlazado de taxonomías, la cola bajo
+WP-Cron, la API REST del panel por HTTP real con sus permisos, y las pantallas en
+un Chromium de verdad (Playwright): que montan sin errores, que traducir, revisar
+y guardar ajustes funcionan, y que en un móvil no hay desplazamiento lateral.
 
 Los tests unitarios pasaban al 100 % mientras el plugin tenía siete fallos que
 solo esta suite podía ver. Detalles en
@@ -512,9 +523,11 @@ solo esta suite podía ver. Detalles en
 tools/build-zip.sh          # deja el ZIP en dist/
 ```
 
-Empaqueta desde `git archive HEAD`, así que solo entra lo commiteado. Excluye
-`tests/`, `tools/` y `.github/`, y verifica el resultado antes de darlo por
-bueno: que todos los PHP parseen, que cada `require_once` resuelva dentro del
+Empaqueta desde `git archive HEAD`, así que solo entra lo commiteado. Compila la
+interfaz (`admin-ui/`) a partir de ese mismo HEAD y mete solo el resultado
+(`assets/app`), sin fuentes ni `node_modules`. Excluye `tests/`, `tools/` y
+`.github/`, y verifica el resultado antes de darlo por bueno: que cada pantalla
+tenga su bundle, que todos los PHP parseen, que cada `require_once` resuelva dentro del
 archivo, que haya una única carpeta raíz y que la versión del encabezado
 coincida con `WIT_VERSION` — si no coinciden, un sitio actualizado se saltaría
 la creación de tablas y fallaría en silencio.
@@ -536,10 +549,30 @@ add_filter( 'wit_verbose_debug', '__return_true' );
 add_filter( 'wit_create_missing_terms', '__return_false' );
 ```
 
+### La interfaz (`admin-ui/`)
+
+El mismo stack que Imagina Updater: React 18, TypeScript estricto, Vite,
+Tailwind con prefijo `wit-` (sin preflight: no toca el resto de wp-admin),
+componentes de shadcn/ui copiados al proyecto, iconos Lucide y TanStack Query y
+Table. Cada pantalla es una página de WordPress cuyo PHP solo imprime
+`<div id="wit-{pantalla}">`; su bundle se carga solo en esa página, como módulo,
+y habla con `wit/admin/v1` con el nonce `wp_rest`.
+
+```bash
+cd admin-ui
+npm ci            # una vez
+npm run build     # tsc --noEmit + vite build → ../assets/app
+```
+
+`assets/app` no está en git: lo genera el build y lo incluye el ZIP. Sin él,
+cada pantalla muestra un aviso en lugar de quedarse en blanco.
+
 Arquitectura:
 
 | Clase | Responsabilidad |
 |---|---|
+| `WIT_Admin_App` | Menú, puntos de montaje y carga de cada pantalla con su configuración |
+| `WIT_Admin_REST` | La API del panel: contenidos, revisión, cola, cadenas, historial, ajustes |
 | `WIT_HTML_Translator` | Tokeniza HTML y sustituye texto por posición, sin re-serializar |
 | `WIT_Field_Rules` | Decide qué claves de `attrs`/`settings` contienen texto traducible |
 | `WIT_Translator_Engine` | Llamadas a la API, protocolo de lote con marcadores, reintentos |

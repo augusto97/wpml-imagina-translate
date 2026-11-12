@@ -3,7 +3,7 @@
  * Plugin Name: WPML Imagina Translate
  * Plugin URI: https://github.com/augusto97/wpml-imagina-translate
  * Description: Traduce automáticamente contenido de WordPress usando tu propia API key de IA (OpenAI, Claude, Gemini). Integración perfecta con WPML.
- * Version: 1.5.0
+ * Version: 1.6.0
  * Author: Imagina
  * Author URI: https://github.com/augusto97
  * License: GPL v2 or later
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('WIT_VERSION', '1.5.0');
+define('WIT_VERSION', '1.6.0');
 define('WIT_PLUGIN_FILE', __FILE__);
 define('WIT_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('WIT_PLUGIN_URL', plugin_dir_url(__FILE__));
@@ -111,11 +111,10 @@ class WPML_Imagina_Translate {
         require_once WIT_PLUGIN_DIR . 'includes/class-oauth.php';
         require_once WIT_PLUGIN_DIR . 'includes/class-mcp-server.php';
 
-        // Admin classes
-        if (is_admin()) {
-            require_once WIT_PLUGIN_DIR . 'admin/class-translation-dashboard.php';
-            require_once WIT_PLUGIN_DIR . 'admin/class-admin-ajax.php';
-        }
+        // The admin app (React screens) and the REST API they use. The REST
+        // controller loads everywhere: REST requests are not is_admin().
+        require_once WIT_PLUGIN_DIR . 'includes/class-admin-rest.php';
+        require_once WIT_PLUGIN_DIR . 'includes/class-admin-app.php';
     }
 
     /**
@@ -159,9 +158,10 @@ class WPML_Imagina_Translate {
 
         $this->maybe_upgrade();
 
+        WIT_Admin_REST::instance();
+
         if (is_admin()) {
-            WIT_Translation_Dashboard::instance();
-            WIT_Admin_Ajax::instance();
+            WIT_Admin_App::instance();
         }
     }
 

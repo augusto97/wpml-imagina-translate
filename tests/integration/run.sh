@@ -246,6 +246,12 @@ JAR="$TEST_DIR/cookies.txt"; rm -f "$JAR"
   --data-urlencode "redirect_to=$HOST/wp-admin/"
 grep -q "wordpress_logged_in" "$JAR" && ok "sesión de administrador" || bad "no se pudo iniciar sesión"
 
+# The screens are React apps built into assets/app (admin-ui/). Without the
+# build every screen would print a notice instead, so say that first.
+[ -f "$PLUGIN_DIR/assets/app/app.asset.php" ] \
+  && ok "la interfaz está compilada (assets/app)" \
+  || bad "falta assets/app: ejecuta «npm ci && npm run build» en admin-ui/"
+
 : > "$LOG"
 page() { # ruta, etiqueta, subcadena esperada
   local raw code html file
@@ -268,11 +274,20 @@ page() { # ruta, etiqueta, subcadena esperada
 
   grep -Eo "<b>(Warning|Notice|Fatal error)</b>: [^<]{0,110}" "$file" | head -3 | sed 's/^/      PHP: /'
 }
-page "admin.php?page=wpml-ia-translate"               "Dashboard"        "wit-dashboard"
-page "admin.php?page=wpml-ia-translate&target_lang=en&post_types%5B%5D=post&post_types%5B%5D=page" \
-                                                      "Dashboard filtrado" "wit-post-checkbox"
-page "admin.php?page=wpml-ia-translate-logs"          "Logs"             "wit-logs"
-page "admin.php?page=wpml-imagina-translate-settings" "Ajustes"          "wit-provider-section"
+# Each screen prints only its mount point and loads its own bundle, as an ES
+# module, with the configuration the app reads first.
+screen() { # slug de la página, pantalla, etiqueta
+  page "admin.php?page=$1" "$3" "id=\"wit-$2\""
+  local file="$TEST_DIR/page-$(printf '%s' "$3" | tr ' /' '__').html"
+  # Attribute order changes between WordPress versions (id before src in 7.x).
+  grep -Eq "<script type=\"module\"[^>]* src=\"[^\"]*/assets/app/$2\.js" "$file" \
+    && ok "$3: carga su bundle como módulo" || bad "$3: no carga assets/app/$2.js como type=module"
+  grep -q 'var witConfig = {' "$file" && ok "$3: configuración localizada" || bad "$3: falta witConfig"
+}
+screen "wpml-ia-translate"               dashboard "Inicio"
+screen "wpml-ia-translate-content"       content   "Contenidos"
+screen "wpml-ia-translate-logs"          history   "Historial"
+screen "wpml-imagina-translate-settings" settings  "Ajustes"
 page "plugins.php"                                    "Enlace «Ajustes» en la lista de plugins" "wpml-imagina-translate-settings"
 
 LOC=$("${CURL[@]}" -o /dev/null -w '%{redirect_url}' -b "$JAR" \
@@ -284,45 +299,91 @@ esac
 check_log "pantallas"
 
 # =============================================================================
-section "E. Endpoints AJAX"
+section "E. API REST del panel"
 # =============================================================================
-# The page carries several "nonce" values; the plugin's is inside its own
-# localized witAdmin object.
-NONCE=$(grep -o 'var witAdmin = {[^;]*}' "$TEST_DIR/page-Dashboard_filtrado.html" \
-        | grep -o '"nonce":"[a-f0-9]*"' | head -1 | cut -d'"' -f4)
-[ -n "$NONCE" ] && ok "nonce localizado" || bad "no se encontró el nonce del plugin"
+# The nonce the screens send with every request (wp_rest), from the config
+# WordPress localized into the page.
+nonce_of() { grep -o 'var witConfig = {[^;]*}' "$1" | grep -o '"nonce":"[a-f0-9]*"' | head -1 | cut -d'"' -f4; }
+RNONCE=$(nonce_of "$TEST_DIR/page-Inicio.html")
+[ -n "$RNONCE" ] && ok "nonce de la API en witConfig" || bad "no se encontró el nonce en witConfig"
+RJAR="$JAR"
 
-: > "$LOG"
-ajax() { # acción, etiqueta, datos extra…
-  local action="$1" label="$2" body; shift 2
-  body=$("${CURL[@]}" -b "$JAR" -X POST "$HOST/wp-admin/admin-ajax.php" \
-         -d "action=$action" -d "nonce=$NONCE" "$@")
-  printf '%s' "$body" | grep -q '"success":true' && ok "$label" || bad "$label → $(printf '%s' "$body" | head -c 180)"
-  printf '%s' "$body" | grep -Eo "<b>(Warning|Notice|Fatal error)</b>: [^<]{0,110}" | head -2 | sed 's/^/      PHP: /'
+# rest MÉTODO RUTA [JSON] → prints the HTTP code; the body lands in rest.json.
+# ?rest_route= instead of /wp-json/: works whatever the permalinks are.
+REST_OUT="$TEST_DIR/rest.json"
+rest() {
+  local method="$1" path="$2" body="${3:-}" url
+  url="$HOST/?rest_route=/wit/admin/v1/${path%%\?*}"
+  [[ "$path" == *\?* ]] && url="$url&${path#*\?}"
+  local args=(-g -X "$method" -o "$REST_OUT" -w '%{http_code}' -H 'Content-Type: application/json')
+  [ -n "$RJAR" ] && args+=(-b "$RJAR")
+  [ -n "$RNONCE" ] && args+=(-H "X-WP-Nonce: $RNONCE")
+  [ -n "$body" ] && args+=(--data "$body")
+  "${CURL[@]}" "${args[@]}" "$url"
 }
-ajax wit_test_connection          "wit_test_connection"          -d "provider=openai"
-ajax wit_fetch_models             "wit_fetch_models"             -d "provider=openai"
-ajax wit_translate_post           "wit_translate_post"           -d "post_id=$POST_ID" -d "target_language=fr"
-ajax wit_check_translation_status "wit_check_translation_status" -d "post_id=$POST_ID" -d "target_language=fr"
-ajax wit_enqueue_batch            "wit_enqueue_batch"            -d "post_ids[]=$PAGE_ID" -d "target_language=en"
-ajax wit_queue_status             "wit_queue_status"
-ajax wit_cancel_queue             "wit_cancel_queue"
-ajax wit_clear_memory             "wit_clear_memory"
-
-echo "  — deben rechazarse —"
-reject() { # etiqueta, datos…
-  local label="$1" body; shift
-  body=$("${CURL[@]}" -X POST "$HOST/wp-admin/admin-ajax.php" "$@")
-  if [ "$body" = "0" ] || printf '%s' "$body" | grep -q '"success":false'; then
-    ok "$label"
+# A Python expression over the last response, as d.
+jget() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2], {}, {"d": d}))' "$REST_OUT" "$1" 2>/dev/null; }
+# A JSON object from key/value pairs, escaped properly.
+jbody() { python3 -c 'import json,sys; a=sys.argv[1:]; print(json.dumps({a[i]: (int(a[i+1]) if a[i+1].isdigit() else a[i+1]) for i in range(0, len(a), 2)}))' "$@"; }
+# rcheck ETIQUETA CÓDIGO MÉTODO RUTA [JSON] [CONDICIÓN]
+rcheck() {
+  local label="$1" want="$2" code; shift 2
+  code=$(rest "$1" "$2" "${3:-}")
+  if [ "$code" != "$want" ]; then
+    bad "$label — HTTP $code (esperaba $want): $(head -c 220 "$REST_OUT")"
+  elif [ -n "${4:-}" ] && [ "$(jget "$4")" != "True" ]; then
+    bad "$label — respuesta inesperada: $(head -c 220 "$REST_OUT")"
   else
-    bad "$label NO rechazado → $(printf '%s' "$body" | head -c 120)"
+    ok "$label"
   fi
 }
-reject "nonce inválido"      -b "$JAR" -d "action=wit_translate_post" -d "nonce=INVALIDO" -d "post_id=$POST_ID" -d "target_language=fr"
-reject "idioma inexistente"  -b "$JAR" -d "action=wit_translate_post" -d "nonce=$NONCE"   -d "post_id=$POST_ID" -d "target_language=xx"
-reject "sin sesión"                    -d "action=wit_translate_post" -d "nonce=$NONCE"   -d "post_id=$POST_ID" -d "target_language=fr"
-check_log "ajax"
+
+: > "$LOG"
+rcheck "resumen del inicio"           200 GET  "overview" "" "'setup' in d and len(d['languages']) == 2 and 'queue' in d"
+rcheck "listado de contenidos"        200 GET  "posts?language=en&status=all" "" "d['total'] >= 2 and 'translation' in d['items'][0] and 'queued' in d['items'][0]"
+rcheck "listado filtrado por tipo"    200 GET  "posts?language=en&status=all&post_types[]=page" "" "d['total'] >= 1 and all(i['type'] == 'page' for i in d['items'])"
+rcheck "traducir un contenido"        200 POST "translate" "$(jbody post_id "$POST_ID" language fr)" "d['status'] == 'complete' and d['translation_id'] > 0"
+FR_ID=$(jget "d['translation_id']")
+rcheck "estado del trabajo"           200 GET  "translate-status?post_id=$POST_ID&language=fr" "" "d['status'] == 'complete'"
+rcheck "revisión, original y traducción" 200 GET "review?post_id=$POST_ID&language=fr" "" "d['original']['title'] != '' and d['translation']['title'].startswith('[FR]')"
+FR_TITLE=$(jget "d['translation']['title']")
+rcheck "corregir una frase"           200 POST "correct" "$(jbody post_id "$POST_ID" language fr current_text "$FR_TITLE" new_text "$FR_TITLE (revisado)")"
+[ "$("$WP" post get "$FR_ID" --field=post_title 2>/dev/null)" = "$FR_TITLE (revisado)" ] \
+  && ok "la corrección queda en la traducción" || bad "la corrección no llegó al título de la traducción"
+rcheck "publicar la traducción"       200 POST "publish" "$(jbody post_id "$POST_ID" language fr)"
+[ "$("$WP" post get "$FR_ID" --field=post_status 2>/dev/null)" = "publish" ] && ok "queda publicada" || bad "no quedó publicada"
+rcheck "despublicarla"                200 POST "remove" "$(jbody post_id "$POST_ID" language fr mode unpublish)"
+[ "$("$WP" post get "$FR_ID" --field=post_status 2>/dev/null)" = "draft" ] && ok "vuelve a borrador" || bad "no volvió a borrador"
+# WP-Cron held while the queued state is observed (wit-test-hooks.php).
+"$WP" option update wit_test_hold_cron 1 >/dev/null
+rcheck "encolar un contenido"         200 POST "queue" "{\"post_ids\":[$PAGE_ID],\"language\":\"en\"}" "d['queued'] == 1"
+rcheck "el listado lo marca en cola"  200 GET  "posts?language=en&status=all&post_types[]=page" "" "any(i['id'] == $PAGE_ID and i['queued'] == 'pending' for i in d['items'])"
+rcheck "progreso de la cola"          200 GET  "queue" "" "d['pending'] >= 1"
+rcheck "detener la cola"              200 DELETE "queue" "" "d['removed'] >= 1"
+"$WP" option delete wit_test_hold_cron >/dev/null
+rcheck "historial"                    200 GET  "logs" "" "d['total'] >= 1 and d['items'][0]['kind'] == 'post' and d['items'][0]['date'] != ''"
+rcheck "ajustes"                      200 GET  "settings" "" "d['keys']['openai']['stored'] and d['keys']['openai']['hint'].startswith('…')"
+OPENAI_KEY=$("$WP" eval 'echo get_option("wit_settings")["openai_api_key"];' 2>/dev/null | tail -1)
+grep -qF "$OPENAI_KEY" "$REST_OUT" && bad "los ajustes devuelven la API key entera" || ok "sin la API key en la respuesta (solo sus 4 últimos caracteres)"
+rcheck "modelos del proveedor"        200 POST "models" '{"provider":"openai"}' "len(d['models']) > 0"
+rcheck "probar la conexión"           200 POST "test-connection"
+rcheck "vaciar la memoria"            200 DELETE "memory" "" "'removed' in d"
+if [ "$REAL_WPML_ST" != "1" ]; then
+  rcheck "sin String Translation, las cadenas responden 404" 404 GET "strings?language=en"
+fi
+
+echo "  — deben rechazarse —"
+rcheck "idioma inexistente"           400 POST "translate" "$(jbody post_id "$POST_ID" language xx)"
+SAVED_NONCE="$RNONCE"
+RNONCE="";        rcheck "sin nonce (solo la cookie)" 401 GET "overview"
+RNONCE="abc123";  rcheck "nonce inválido"             403 GET "overview"
+RJAR=""; RNONCE=""
+rcheck "anónimo"                      401 GET  "overview"
+rcheck "anónimo no traduce"           401 POST "translate" "$(jbody post_id "$POST_ID" language fr)"
+RNONCE="$SAVED_NONCE"
+rcheck "un nonce robado sin su cookie" 403 POST "translate" "$(jbody post_id "$POST_ID" language fr)"
+RJAR="$JAR"
+check_log "api del panel"
 
 # =============================================================================
 section "F. Traducir por MCP: las herramientas, con un chat simulado"
@@ -822,11 +883,12 @@ CHECK
 EN_ID=$(python3 -c "import json,sys;r=open(sys.argv[1]).read();d,_=json.JSONDecoder().raw_decode(r[r.index('{'):]);print(d.get('en_id',0))" "$TEST_DIR/audit.json" 2>/dev/null)
 
 echo "  — por HTTP —"
-reject "AJAX: traducir una traducción al idioma original" -b "$JAR" -d "action=wit_translate_post" -d "nonce=$NONCE" -d "post_id=$EN_ID" -d "target_language=es"
-page "admin.php?page=wpml-ia-translate&target_lang=en&post_types%5B%5D=post&wit_status=all&paged=2" "Panel, página 2" "Contenido de relleno"
-page "admin.php?page=wpml-ia-translate&target_lang=en&post_types%5B%5D=post&wit_s=relleno+42&wit_status=all" "Panel, búsqueda" "Contenido de relleno 42"
+rcheck "API: traducir una traducción al idioma original se rechaza" 400 POST "translate" "$(jbody post_id "$EN_ID" language es)"
+rcheck "Panel, página 2"   200 GET "posts?language=en&post_types[]=post&status=all&page=2&per_page=50" "" "d['page'] == 2 and any(i['title'].startswith('Contenido de relleno') for i in d['items'])"
+rcheck "Panel, búsqueda"   200 GET "posts?language=en&post_types[]=post&status=all&search=relleno+42" "" "any(i['title'] == 'Contenido de relleno 42' for i in d['items'])"
 
-# Logs as an Author: another user's private draft must not show up.
+# As an Author: the screens they can use load, the ones they cannot are
+# refused, and the history hides another user's private draft.
 "$WP" user update wit_audit_author --user_pass=autor-audit >/dev/null 2>&1
 SECRET=$("$WP" eval 'wp_set_current_user(1); $id = wp_insert_post(array("post_title" => "Borrador privado HTTP", "post_status" => "private", "post_type" => "post")); (new WIT_Translation_Manager())->log_event($id, "en", "prueba", "openai"); echo $id;' 2>/dev/null | tail -1)
 AJAR="$TEST_DIR/cookies-author.txt"; rm -f "$AJAR"
@@ -834,14 +896,18 @@ AJAR="$TEST_DIR/cookies-author.txt"; rm -f "$AJAR"
 "${CURL[@]}" -c "$AJAR" -b "$AJAR" -o /dev/null -X POST "$HOST/wp-login.php" \
   --data-urlencode "log=wit_audit_author" --data-urlencode "pwd=autor-audit" \
   --data-urlencode "wp-submit=Log In" --data-urlencode "testcookie=1"
-ALOGS=$("${CURL[@]}" -b "$AJAR" "$HOST/wp-admin/admin.php?page=wpml-ia-translate-logs")
+APAGE=$("${CURL[@]}" -b "$AJAR" "$HOST/wp-admin/admin.php?page=wpml-ia-translate-logs")
 # Here-strings, not printf | grep -q: under pipefail, grep closing the pipe
 # early kills printf with SIGPIPE on a large page and the match reads as a miss.
-if grep -q "wit-logs" <<< "$ALOGS"; then
-  grep -q "Borrador privado HTTP" <<< "$ALOGS" && bad "un Autor ve el título del borrador privado de otro" || ok "Logs como Autor: el borrador privado de otro no aparece"
-else
-  bad "la página de logs no carga para un Autor"
-fi
+grep -q 'id="wit-history"' <<< "$APAGE" && ok "Historial carga para un Autor" || bad "la pantalla Historial no carga para un Autor"
+grep -q '"canManage":""\|"canManage":false' <<< "$APAGE" && ok "la app sabe que un Autor no gestiona ajustes" || bad "witConfig.canManage no es falso para un Autor"
+SAVED_NONCE="$RNONCE"; RJAR="$AJAR"
+RNONCE=$(grep -o 'var witConfig = {[^;]*}' <<< "$APAGE" | grep -o '"nonce":"[a-f0-9]*"' | head -1 | cut -d'"' -f4)
+rcheck "Historial como Autor" 200 GET "logs?per_page=100" "" "all(i['title'] != 'Borrador privado HTTP' for i in d['items'])"
+rcheck "un Autor no lee los ajustes"     403 GET "settings"
+rcheck "un Autor no cambia los ajustes"  403 PUT "settings" '{"glossary":"x"}'
+rcheck "un Autor no revoca conexiones"   403 DELETE "connections/0123456789abcdef0123456789abcdef"
+RJAR="$JAR"; RNONCE="$SAVED_NONCE"
 "$WP" post delete "$SECRET" --force >/dev/null 2>&1
 check_log "auditoría"
 
@@ -939,53 +1005,88 @@ CHECK
   grep -q '<span id="wit-g">\[ES\] Leave a reply</span>' <<< "$FRONT" \
     && ok "en la web, la cadena del tema sale traducida (gettext servido por String Translation)" \
     || bad "en la web la cadena del tema no sale traducida: $(grep -o '<span id="wit-g">[^<]*' <<< "$FRONT")"
-  page "admin.php?page=wpml-ia-translate-strings&wit_lang=es&wit_status=all" "Pantalla Cadenas" "wit-strings-table"
+  screen "wpml-ia-translate-strings" strings "Cadenas"
+  echo "  — la pantalla Cadenas, por su API —"
+  rcheck "cadenas al español"            200 GET "strings?language=es&status=all" "" "d['total'] >= 5 and {'id','domain','text','translation','status','from_file'} <= set(d['items'][0])"
+  rcheck "dominios con pendientes"       200 GET "strings/domains?language=es" "" "any(x['domain'] == 'wit-theme' for x in d)"
+  DATE_ID=$("$WP" eval 'echo icl_register_string("wit-theme", "wit-date-format", "F j, Y", false, "en");' 2>/dev/null | tail -1)
+  PH_ID=$("$WP" eval 'echo icl_register_string("wit-theme", "wit-ph-manual", "%d new comments", false, "en");' 2>/dev/null | tail -1)
+  rcheck "a mano: sin el marcador se rechaza" 400 POST "strings/save" "$(jbody id "$PH_ID" language es value "comentarios nuevos")" "'%d' in d['message']"
+  rcheck "a mano: con el marcador se guarda"  200 POST "strings/save" "$(jbody id "$PH_ID" language es value "%d comentarios nuevos")" "d['translation'] == '%d comentarios nuevos'"
+  rcheck "y se lee como traducida"            200 GET "strings?language=es&status=translated&search=new+comments" "" "any(i['id'] == $PH_ID and i['translation'] == '%d comentarios nuevos' for i in d['items'])"
+  : > "$AILOG"
+  rcheck "un formato de fecha se guarda tal cual" 200 POST "strings/translate" "{\"ids\":[$DATE_ID],\"language\":\"es\"}" "d['saved'] == 1 and d['translations']['$DATE_ID'] == 'F j, Y'"
+  grep -q 'F j, Y' "$AILOG" && bad "«F j, Y» se envió a la IA" || ok "sin enviarlo a la IA (antes podía volver como «j F, A» y romper las fechas)"
+  rcheck "siguiente lote de pendientes"  200 GET "strings/next?language=fr" "" "'ids' in d and 'remaining' in d"
   "$WP" post delete "$DEMO" --force >/dev/null 2>&1
   check_log "wpml real"
 fi
 
 # =============================================================================
-section "H. Guardado de ajustes por el formulario real"
+section "M. Las pantallas en un navegador de verdad"
+# =============================================================================
+# Playwright and its Chromium: from the project if installed there, else the
+# global install. CI installs it; locally, without it, the section says so.
+PW_PATH="$PLUGIN_DIR/tests/integration/client/node_modules:$(npm root -g 2>/dev/null)"
+if NODE_PATH="$PW_PATH" node -e 'require("playwright")' >/dev/null 2>&1; then
+  "$WP" eval-file "$FIXTURES/reset.php" >/dev/null
+  : > "$LOG"
+  NODE_PATH="$PW_PATH" node "$PLUGIN_DIR/tests/integration/browser/screens.cjs" "$HOST" "$REAL_WPML_ST" > "$TEST_DIR/browser.log" 2>&1
+  while IFS= read -r line; do
+    case "$line" in
+      ok:*)  ok "${line#ok: }" ;;
+      bad:*) bad "${line#bad: }" ;;
+    esac
+  done < "$TEST_DIR/browser.log"
+  grep -q '^ok:\|^bad:' "$TEST_DIR/browser.log" || bad "el navegador no llegó a ejecutarse: $(tail -3 "$TEST_DIR/browser.log")"
+  check_log "navegador"
+elif [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  bad "Playwright no está instalado en CI"
+else
+  echo "  (sin Playwright: instala «playwright» y su Chromium para probar las pantallas en un navegador)"
+fi
+
+# =============================================================================
+section "H. Guardado de ajustes desde la pantalla Ajustes"
 # =============================================================================
 : > "$LOG"
-SNONCE=$(grep -o 'name="_wpnonce" value="[a-f0-9]*"' "$TEST_DIR/page-Ajustes.html" | head -1 | cut -d'"' -f4)
-"${CURL[@]}" -b "$JAR" -c "$JAR" -o /dev/null -X POST "$HOST/wp-admin/options.php" \
-  -d "option_page=wit_settings_group" -d "action=update" -d "_wpnonce=$SNONCE" \
-  -d "_wp_http_referer=/wp-admin/admin.php?page=wpml-imagina-translate-settings" \
-  -d "wit_settings[ai_provider]=claude" \
-  --data-urlencode "wit_settings[claude_api_key]=sk-ant-nueva" \
-  -d "wit_settings[claude_model]=claude-haiku-4-5-20251001" \
-  -d "wit_settings[openai_api_key]=" -d "wit_settings[openai_model]=gpt-4o-mini" \
-  -d "wit_settings[gemini_model]=gemini-2.5-flash" \
-  --data-urlencode "wit_settings[translation_prompt]=Translate to {target_language}." \
-  --data-urlencode "wit_settings[glossary]=Imagina"$'\n'"Hola = Hello" \
-  -d "wit_settings[translate_meta_fields]=1" -d "wit_settings[meta_fields_list]=_yoast_wpseo_title" \
-  -d "wit_settings[batch_size]=7" -d "wit_settings[enable_translation_memory]=1"
-
-# What the person sees after pressing Save: options.php sends them back with
-# settings-updated=true. Before 1.4.0 this page printed nothing at all.
-SAVED=$("${CURL[@]}" -b "$JAR" "$HOST/wp-admin/admin.php?page=wpml-imagina-translate-settings&settings-updated=true")
-grep -q 'setting-error-settings_updated' <<< "$SAVED" \
-  && ok "al guardar aparece el aviso de ajustes guardados" \
-  || bad "al guardar no aparece ningún aviso"
+# Exactly what the screen sends: only what changed, keys write-only.
+BODY=$(python3 -c 'import json; print(json.dumps({
+  "provider": "claude",
+  "keys": {"claude": "sk-ant-nueva", "openai": ""},
+  "models": {"claude": "claude-haiku-4-5-20251001"},
+  "prompt": "Translate to {target_language}.",
+  "glossary": "Imagina\nHola = Hello",
+  "translate_meta_fields": True, "meta_fields": "_yoast_wpseo_title, <script>",
+  "batch_size": 7, "memory_enabled": True,
+}))')
+rcheck "guardar ajustes" 200 PUT "settings" "$BODY" "d['provider'] == 'claude' and d['keys']['claude']['stored'] and d['batch_size'] == 7"
+grep -q 'sk-ant-nueva' "$REST_OUT" && bad "la respuesta devuelve la clave recién guardada" || ok "la respuesta no devuelve la clave guardada"
 
 E=$("$WP" eval '
 $s = get_option("wit_settings");
 echo json_encode(array(
     "proveedor"     => $s["ai_provider"] === "claude",
     "clave_nueva"   => $s["claude_api_key"] === "sk-ant-nueva",
-    // An empty submission means "keep it", not "delete it": the form never
-    // renders the stored key, so blanking it must not wipe it.
+    // An empty key means "keep it", not "delete it": the screen never shows
+    // the stored key, so leaving the field blank must not wipe it.
     "clave_intacta" => $s["openai_api_key"] === "sk-test-fake",
     "lote"          => (int) $s["batch_size"] === 7,
     "glosario"      => substr_count($s["glossary"], "\n") === 1,
+    "campos"        => $s["meta_fields_list"] === "_yoast_wpseo_title,script",
 ));')
 f() { printf '%s' "$E" | python3 -c "import json,sys;print(json.load(sys.stdin)['$1'])" 2>/dev/null; }
 for k in proveedor:"proveedor guardado" clave_nueva:"clave nueva guardada" \
-         clave_intacta:"la clave de otro proveedor NO se borra al enviar vacío" \
-         lote:"tamaño de lote guardado" glosario:"saltos de línea del glosario preservados"; do
+         clave_intacta:"la clave de otro proveedor NO se borra al enviarla vacía" \
+         lote:"tamaño de lote guardado" glosario:"saltos de línea del glosario preservados" \
+         campos:"la lista de campos se sanea (nada que no sea una clave)"; do
   [ "$(f "${k%%:*}")" = "True" ] && ok "${k#*:}" || bad "${k#*:}"
 done
+
+# Clearing a key is an explicit action, and touches only that key.
+rcheck "quitar una clave" 200 PUT "settings" '{"clear_keys":{"claude":true}}' "not d['keys']['claude']['stored'] and d['keys']['openai']['stored']"
+# A setting the screen did not send keeps its value.
+rcheck "lo que no se envía no cambia" 200 PUT "settings" '{"glossary":"Imagina"}' "d['batch_size'] == 7 and d['prompt'] == 'Translate to {target_language}.' and d['glossary'] == 'Imagina'"
 check_log "ajustes"
 
 # Leave the install usable for the next run.

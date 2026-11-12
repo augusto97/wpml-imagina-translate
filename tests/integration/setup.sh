@@ -158,6 +158,15 @@ say "Enlazando el plugin y los dobles de prueba"
 # A symlink, so edits in the working tree are live without reinstalling.
 ln -sfn "$PLUGIN_DIR" "$WWW/wp-content/plugins/wpml-imagina-translate"
 
+# The admin screens are a React app; without its build every screen prints a
+# notice instead. Built once here if missing (npm run build after UI edits).
+if [ ! -f "$PLUGIN_DIR/assets/app/app.asset.php" ]; then
+  command -v npm >/dev/null || die "Falta assets/app y no hay npm para compilar admin-ui/ (Node 18+)"
+  say "Compilando la interfaz (admin-ui/)"
+  ( cd "$PLUGIN_DIR/admin-ui" && npm ci --no-audit --no-fund --loglevel=error && npm run build >/dev/null ) \
+    || die "No se pudo compilar admin-ui/"
+fi
+
 mkdir -p "$WWW/wp-content/mu-plugins"
 cp "$PLUGIN_DIR/tests/integration/fixtures/wit-fake-ai.php" \
    "$WWW/wp-content/mu-plugins/wit-fake-ai.php"
@@ -165,6 +174,8 @@ cp "$PLUGIN_DIR/tests/integration/fixtures/wit-mail-catcher.php" \
    "$WWW/wp-content/mu-plugins/wit-mail-catcher.php"
 cp "$PLUGIN_DIR/tests/integration/fixtures/wit-demo-strings.php" \
    "$WWW/wp-content/mu-plugins/wit-demo-strings.php"
+cp "$PLUGIN_DIR/tests/integration/fixtures/wit-test-hooks.php" \
+   "$WWW/wp-content/mu-plugins/wit-test-hooks.php"
 # Where String Translation writes the translation files it serves strings
 # from. A real site has it; a fresh install does not, and ST then fails
 # without a word.

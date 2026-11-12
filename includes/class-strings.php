@@ -325,7 +325,13 @@ class WIT_Strings {
     public static function has_words($text) {
         $bare = preg_replace('/%%|%(?:\d+\$)?[-+ 0#\']*\d*(?:\.\d+)?[bcdeEfFgGosuxX]|\{\{?\s*[A-Za-z0-9_.\-]+\s*\}?\}/', '', (string) $text);
 
-        return (bool) preg_match('/\p{L}/u', (string) $bare) && WIT_HTML_Translator::is_translatable(trim((string) $text));
+        // A word is two letters in a row (or one ideograph/kana/hangul).
+        // Loose letters are not: "F j, Y" and "g:i a" are PHP date formats
+        // that WPML lists as admin texts, and a model "translating" them
+        // into "j F, A" breaks every date on the site.
+        $words = preg_match('/\p{L}{2,}|[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]/u', (string) $bare);
+
+        return (bool) $words && WIT_HTML_Translator::is_translatable(trim((string) $text));
     }
 
     /**
@@ -339,6 +345,12 @@ class WIT_Strings {
         $value = (string) $value;
 
         if (strpos($value, '<') === false) {
+            // Nothing to translate in it ("%s", "F j, Y"): its translation is
+            // itself. Without this it stayed pending forever and every
+            // "translate all" reported it as failed.
+            if (!self::has_words($value)) {
+                return $value;
+            }
             return isset($map[$value]) && trim($map[$value]) !== '' ? (string) $map[$value] : null;
         }
 
@@ -492,6 +504,46 @@ class WIT_Strings {
         }
 
         return array('id' => $item['id'], 'status' => 'saved', 'message' => '', 'translation' => $translation);
+    }
+
+    /**
+     * A translation typed by hand in the panel: same placeholder check as an
+     * AI one, since a broken %s breaks the page just the same.
+     *
+     * @param int    $string_id
+     * @param string $language
+     * @param string $value
+     * @return array{id:int,translation:string}|WP_Error
+     */
+    public static function save_manual($string_id, $language, $value) {
+        if (!self::is_available()) {
+            return new WP_Error('wit_no_st', __('WPML String Translation no está activo.', 'wpml-imagina-translate'));
+        }
+
+        $value = trim((string) $value);
+        if ($value === '') {
+            return new WP_Error('wit_empty', __('Escribe la traducción.', 'wpml-imagina-translate'));
+        }
+
+        $list = self::listing($language, array('status' => 'all', 'ids' => array((int) $string_id), 'per_page' => 1));
+        if (empty($list['items'])) {
+            return new WP_Error('wit_not_found', __('La cadena no existe o no se traduce a ese idioma.', 'wpml-imagina-translate'));
+        }
+
+        $item = $list['items'][0];
+        if (self::placeholders($value) !== self::placeholders($item['text'])) {
+            return new WP_Error('wit_placeholders', sprintf(
+                /* translators: %s: placeholders of the original */
+                __('La traducción debe conservar los marcadores del original, tal cual: %s', 'wpml-imagina-translate'),
+                implode(' ', self::placeholders($item['text'])) ?: '—'
+            ));
+        }
+
+        if (!self::store($item['id'], $language, $value)) {
+            return new WP_Error('wit_store', __('String Translation no aceptó la traducción.', 'wpml-imagina-translate'));
+        }
+
+        return array('id' => $item['id'], 'translation' => $value);
     }
 
     /**

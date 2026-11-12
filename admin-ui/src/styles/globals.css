@@ -1,0 +1,360 @@
+/*
+ * Estilos globales del admin SPA del servidor (Imagina Translate).
+ *
+ * Decisiones clave (CLAUDE.md §5):
+ * - Las variables shadcn viven SCOPED en `.wit-app`, NO en `:root`.
+ *   Esto evita contaminar el resto del wp-admin con tokens nuestros.
+ * - Tailwind preflight está desactivado en `tailwind.config.ts`. El
+ *   reset que sí queremos (box-sizing, font-family) se aplica solo
+ *   dentro de `.wit-app` y sus descendientes.
+ * - Modo oscuro diferido a Fase 5.B; las variables `.dark` quedan
+ *   declaradas como placeholder para que la activación futura sea
+ *   solo añadir la clase `dark` al contenedor.
+ */
+
+@import '@fontsource/inter/400.css';
+@import '@fontsource/inter/500.css';
+@import '@fontsource/inter/600.css';
+@import '@fontsource/inter/700.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  .wit-app {
+    /*
+     * Paleta provisional. Color primario expuesto vía variable para
+     * permitir reemplazo de un solo punto cuando llegue la paleta
+     * corporativa de Imagina (CLAUDE.md §5).
+     *
+     * Valores en formato HSL (sin `hsl(...)`) para que Tailwind pueda
+     * componerlos con alpha (`bg-wit-primary/50`).
+     */
+    --wit-background: 0 0% 100%;
+    --wit-foreground: 222 47% 11%;
+
+    --wit-card: 0 0% 100%;
+    --wit-card-foreground: 222 47% 11%;
+
+    --wit-popover: 0 0% 100%;
+    --wit-popover-foreground: 222 47% 11%;
+
+    --wit-primary: 221 83% 53%;
+    --wit-primary-foreground: 210 40% 98%;
+
+    --wit-secondary: 210 40% 96%;
+    --wit-secondary-foreground: 222 47% 11%;
+
+    --wit-muted: 210 40% 96%;
+    --wit-muted-foreground: 215 16% 47%;
+
+    --wit-accent: 210 40% 96%;
+    --wit-accent-foreground: 222 47% 11%;
+
+    --wit-destructive: 0 84% 60%;
+    --wit-destructive-foreground: 210 40% 98%;
+
+    --wit-border: 214 32% 91%;
+    --wit-input: 214 24% 84%;
+    --wit-ring: 221 83% 53%;
+
+    --wit-radius: 0.5rem;
+
+    /* Reset scoped: solo dentro de la SPA, NO global. */
+    box-sizing: border-box;
+    font-family:
+      'Inter',
+      ui-sans-serif,
+      system-ui,
+      sans-serif;
+    font-feature-settings:
+      'cv02',
+      'cv03',
+      'cv04',
+      'cv11';
+    color: hsl(var(--wit-foreground));
+    background-color: hsl(var(--wit-background));
+
+    /*
+     * Padding y min-height del contenedor raíz.
+     *
+     * Por qué aquí en lugar de utility classes `wit-min-h-screen
+     * wit-bg-background wit-p-6` en cada página:
+     *
+     * `tailwind.config.ts` usa `important: '.wit-app'`, que genera
+     * cada utility como `.wit-app .wit-X { ... !important }`. Es un
+     * selector DESCENDIENTE: un elemento con AMBAS clases en sí
+     * mismo (`<div class="wit-app wit-p-6">`) NO matchea porque
+     * `.wit-p-6` necesita ser descendiente de `.wit-app`. Antes
+     * esto se traducía en cards/headers pegados a los bordes.
+     *
+     * La solución es aplicar las propiedades aquí directamente. Los
+     * descendientes siguen usando utility classes como hasta ahora.
+     */
+    min-height: calc(100vh - 32px);
+    padding: 1.25rem 1.25rem 3rem;
+    margin-left: -20px;
+    background-color: hsl(210 40% 98%);
+  }
+
+  /*
+   * Reset scoped a `.wit-app` — equivalente a Tailwind Preflight.
+   *
+   * IMPORTANTE: usamos `:where(.wit-app)` para que el segmento de
+   * la clase NO sume especificidad. La especificidad final de cada
+   * regla queda en (0, 0, X) donde X es el número de elementos del
+   * selector interno. Esto garantiza que CUALQUIER utility class
+   * de Tailwind (`.wit-bg-primary`, `.wit-px-3`, etc., con
+   * especificidad (0,1,0)) gane sin necesidad de !important.
+   *
+   * Sin esto, una regla como `.wit-app button { padding: 0 }`
+   * tendría especificidad (0,1,1) y pisaría a `.wit-px-3` aunque
+   * Tailwind ponga la utility class después en el CSS.
+   *
+   * Se mantiene Tailwind con `preflight: false` para no contaminar
+   * el resto de wp-admin (CLAUDE.md §5).
+   */
+  :where(.wit-app),
+  :where(.wit-app *),
+  :where(.wit-app *::before),
+  :where(.wit-app *::after) {
+    box-sizing: border-box;
+    border-width: 0;
+    border-style: solid;
+    border-color: hsl(var(--wit-border));
+  }
+
+  :where(.wit-app) :where(button, [type='button'], [type='reset'], [type='submit']) {
+    -webkit-appearance: button;
+    appearance: button;
+    background-color: transparent;
+    background-image: none;
+    border-radius: 0;
+    box-shadow: none;
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+    letter-spacing: inherit;
+    line-height: inherit;
+    margin: 0;
+    padding: 0;
+    text-align: inherit;
+    text-decoration: none;
+    text-transform: none;
+  }
+  :where(.wit-app) :where(button:focus) {
+    outline: none;
+  }
+
+  /* INPUTS / SELECT / TEXTAREA — reset
+   *
+   * wp-admin/css/forms.css define `input[type=text]{...}` con
+   * specificity (0,1,1). Mi reset usa `:where(.wit-app) input[type='X']`
+   * que tiene SOLO (0,1,1) (gracias a :where() el outer aporta 0).
+   * Empate → gana el último cargado → este CSS (que carga después
+   * que wp-admin via wp_enqueue_style).
+   *
+   * Las utility classes están en (0,2,0) gracias a
+   * `important: '.wit-app'` en tailwind.config.ts → ganan a este
+   * reset, como esperamos. */
+  :where(.wit-app) input[type='text'],
+  :where(.wit-app) input[type='search'],
+  :where(.wit-app) input[type='email'],
+  :where(.wit-app) input[type='url'],
+  :where(.wit-app) input[type='tel'],
+  :where(.wit-app) input[type='password'],
+  :where(.wit-app) input[type='number'],
+  :where(.wit-app) input[type='date'],
+  :where(.wit-app) input[type='datetime-local'],
+  :where(.wit-app) input[type='month'],
+  :where(.wit-app) input[type='week'],
+  :where(.wit-app) input[type='time'],
+  :where(.wit-app) input[type='color'],
+  :where(.wit-app) input:not([type]),
+  :where(.wit-app) select,
+  :where(.wit-app) textarea {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-color: transparent;
+    background-image: none;
+    /* Ancho 0 pero estilo sólido: `border: 0` dejaba border-style en none y
+     * la utility `wit-border` (que solo pone el ancho) no pintaba nada. */
+    border-width: 0;
+    border-style: solid;
+    border-radius: 0;
+    box-shadow: none;
+    color: inherit;
+    font: inherit;
+    letter-spacing: inherit;
+    line-height: inherit;
+    margin: 0;
+    min-height: 0;
+    outline: none;
+    padding: 0;
+    text-transform: none;
+  }
+
+  /* CHECKBOX / RADIO — tamaño fijo + accent color. wp-admin define
+   * margin negativo y borde a estos elementos; especificidad (0,1,1)
+   * para empate y ganar source order. */
+  :where(.wit-app) input[type='checkbox'],
+  :where(.wit-app) input[type='radio'] {
+    -webkit-appearance: auto;
+    -moz-appearance: auto;
+    appearance: auto;
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
+    margin: 0;
+    padding: 0;
+    cursor: pointer;
+    accent-color: hsl(var(--wit-primary));
+    vertical-align: middle;
+  }
+  :where(.wit-app) input[type='checkbox']:disabled,
+  :where(.wit-app) input[type='radio']:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  /* SELECT — mantenemos arrow nativo del navegador. (0,1,1) para
+   * empatar/ganar a wp-admin. */
+  :where(.wit-app) select {
+    -webkit-appearance: auto;
+    -moz-appearance: auto;
+    appearance: auto;
+  }
+
+  /* Placeholder color en inputs y textareas. */
+  :where(.wit-app) input::placeholder,
+  :where(.wit-app) textarea::placeholder {
+    color: hsl(var(--wit-muted-foreground));
+    opacity: 1;
+  }
+
+  :where(.wit-app) :where(table) {
+    border-collapse: collapse;
+    border-spacing: 0;
+    text-indent: 0;
+  }
+  :where(.wit-app) :where(th, td) {
+    padding: 0;
+    text-align: left;
+    vertical-align: inherit;
+  }
+
+  /*
+   * Texto: especificidad (0,0,1), no (0,0,0). wp-admin/common.css pone
+   * `p { margin: 1em 0; font-size: 13px }`, `h3 { margin: 1em 0; font-size:
+   * 1.3em }` y `li { margin-bottom: 6px }`, también (0,0,1): con el reset
+   * envuelto entero en :where() ganaban ellos y cada título arrastraba un
+   * hueco de 13px. Empate → gana este CSS, que carga después. Las utilities
+   * siguen ganando a ambos con (0,2,0).
+   */
+  :where(.wit-app) h1,
+  :where(.wit-app) h2,
+  :where(.wit-app) h3,
+  :where(.wit-app) h4,
+  :where(.wit-app) h5,
+  :where(.wit-app) h6 {
+    font: inherit;
+    font-weight: inherit;
+    color: inherit;
+    margin: 0;
+    padding: 0;
+  }
+  :where(.wit-app) p,
+  :where(.wit-app) pre,
+  :where(.wit-app) figure,
+  :where(.wit-app) blockquote,
+  :where(.wit-app) dl,
+  :where(.wit-app) dd {
+    margin: 0;
+    font-size: inherit;
+    line-height: inherit;
+  }
+  :where(.wit-app) ul,
+  :where(.wit-app) ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  :where(.wit-app) li {
+    margin: 0;
+  }
+
+  :where(.wit-app) a {
+    background-color: transparent;
+    color: inherit;
+    text-decoration: inherit;
+  }
+  :where(.wit-app) a:hover,
+  :where(.wit-app) a:active,
+  :where(.wit-app) a:focus {
+    color: inherit;
+    text-decoration: none;
+    box-shadow: none;
+  }
+  :where(.wit-app) a:focus-visible {
+    outline: 2px solid hsl(var(--wit-ring));
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  :where(.wit-app) :where(code, kbd, samp, pre) {
+    font-family:
+      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+      'Liberation Mono', 'Courier New', monospace;
+    font-size: 1em;
+  }
+
+  :where(.wit-app) :where(img, svg, video, canvas) {
+    display: block;
+    max-width: 100%;
+    height: auto;
+  }
+
+  :where(.wit-app) :where(hr) {
+    border-top-width: 1px;
+    color: inherit;
+    height: 0;
+  }
+
+  /* Placeholder para Fase 5.B (modo oscuro) — sin valores aún. */
+  .wit-app.dark {
+    /* TODO Fase 5.B: poblar con tokens dark. */
+  }
+}
+
+/*
+ * Select nativo: el CSS de wp-admin le pinta una flecha a la derecha y le
+ * reserva 24px de padding, pero nuestras clases `px-3` lo dejaban en 12px y
+ * la flecha montaba sobre el texto ("Todos los plugins⌄").
+ */
+.wit-app select {
+  padding-right: 2rem !important;
+}
+
+/*
+ * Claves, tokens y slugs dentro de tablas: nunca partirlos. wp-admin deja
+ * que `code` corte en cualquier carácter y en móvil la columna se quedaba
+ * en "iu / s_4 / 990…" una sílaba por línea. La tabla ya hace scroll.
+ */
+.wit-app td code {
+  white-space: nowrap;
+  word-break: normal;
+}
+
+/* En móvil wp-admin quita el margen izquierdo del contenido. */
+@media screen and (max-width: 782px) {
+  .wit-app {
+    margin-left: -10px;
+    padding: 0.75rem 0.75rem 3rem;
+  }
+}
+
+.wit-app a:focus {
+  box-shadow: none;
+}

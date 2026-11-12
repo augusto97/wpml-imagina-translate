@@ -33,6 +33,43 @@ class WIT_Abilities {
 
     private static $instance = null;
 
+    /**
+     * Who is acting: 'mcp' (the Claude chat) or 'panel' (the plugin's own
+     * screens, which reuse these callbacks). Only changes what the history
+     * says and records.
+     *
+     * @var string
+     */
+    public static $channel = 'mcp';
+
+    /**
+     * Run a callback as the admin panel rather than the chat.
+     *
+     * @param callable $callback
+     * @return mixed
+     */
+    public static function as_panel(callable $callback) {
+        $previous      = self::$channel;
+        self::$channel = 'panel';
+        try {
+            return $callback();
+        } finally {
+            self::$channel = $previous;
+        }
+    }
+
+    /** Where an action came from, for history messages. */
+    private static function from() {
+        return self::$channel === 'panel'
+            ? __('desde el panel', 'wpml-imagina-translate')
+            : __('desde Claude', 'wpml-imagina-translate');
+    }
+
+    /** The history's "via" column. */
+    private static function via() {
+        return self::$channel === 'panel' ? 'panel' : 'mcp';
+    }
+
     public static function instance() {
         if (is_null(self::$instance)) {
             self::$instance = new self();
@@ -808,11 +845,12 @@ class WIT_Abilities {
         }
 
         (new WIT_Translation_Manager())->log_event($post_id, $language, sprintf(
-            /* translators: 1: old wording, 2: new wording */
-            __('Corrección desde Claude: «%1$s» → «%2$s»', 'wpml-imagina-translate'),
+            /* translators: 1: where from, 2: old wording, 3: new wording */
+            __('Corrección %1$s: «%2$s» → «%3$s»', 'wpml-imagina-translate'),
+            self::from(),
             mb_substr($current_trimmed, 0, 80),
             mb_substr(trim($new), 0, 80)
-        ));
+        ), self::via());
 
         return array(
             'translation_id'      => $translation->ID,
@@ -843,7 +881,7 @@ class WIT_Abilities {
             // re-run the content through kses for users without
             // unfiltered_html and strip markup the translation inherited.
             wp_publish_post($translation->ID);
-            (new WIT_Translation_Manager())->log_event((int) $input['post_id'], (string) $input['language'], __('Traducción publicada desde Claude', 'wpml-imagina-translate'));
+            (new WIT_Translation_Manager())->log_event((int) $input['post_id'], (string) $input['language'], sprintf(__('Traducción publicada %s', 'wpml-imagina-translate'), self::from()), self::via());
         }
 
         return array(
@@ -870,7 +908,7 @@ class WIT_Abilities {
             if (!wp_trash_post($translation->ID)) {
                 return new WP_Error('wit_trash_failed', 'WordPress could not move the translation to the trash.');
             }
-            $message = __('Traducción enviada a la papelera desde Claude', 'wpml-imagina-translate');
+            $message = sprintf(__('Traducción enviada a la papelera %s', 'wpml-imagina-translate'), self::from());
         } else {
             if ($translation->post_status !== 'draft') {
                 // Status only, like publish: wp_update_post() would re-run the
@@ -880,10 +918,10 @@ class WIT_Abilities {
                 clean_post_cache($translation->ID);
                 wp_transition_post_status('draft', $translation->post_status, get_post($translation->ID));
             }
-            $message = __('Traducción despublicada (vuelve a borrador) desde Claude', 'wpml-imagina-translate');
+            $message = sprintf(__('Traducción despublicada (vuelve a borrador) %s', 'wpml-imagina-translate'), self::from());
         }
 
-        (new WIT_Translation_Manager())->log_event($source->ID, (string) $input['language'], $message);
+        (new WIT_Translation_Manager())->log_event($source->ID, (string) $input['language'], $message, self::via());
 
         return array(
             'translation_id' => $translation->ID,
@@ -1011,10 +1049,11 @@ class WIT_Abilities {
 
         if (!empty($changed)) {
             (new WIT_Translation_Manager())->log_event(0, '', sprintf(
-                /* translators: %s: setting names */
-                __('Ajustes cambiados desde Claude: %s', 'wpml-imagina-translate'),
+                /* translators: 1: where from, 2: setting names */
+                __('Ajustes cambiados %1$s: %2$s', 'wpml-imagina-translate'),
+                self::from(),
                 implode(', ', $changed)
-            ));
+            ), self::via());
         }
 
         $result            = self::site_settings();
@@ -1093,9 +1132,9 @@ class WIT_Abilities {
             }
             (new WIT_Translation_Manager())->log_event(0, '', sprintf(
                 /* translators: 1: post type, 2: old mode, 3: new mode */
-                __('WPML desde Claude: tipo «%1$s» de %2$s a %3$s', 'wpml-imagina-translate'),
-                $type, $before, $mode
-            ));
+                __('WPML %4$s: tipo «%1$s» de %2$s a %3$s', 'wpml-imagina-translate'),
+                $type, $before, $mode, self::from()
+            ), self::via());
             return array('post_type' => $type, 'before' => $before, 'now' => WIT_WPML_Native::post_type_mode($type));
         }
 
@@ -1112,9 +1151,9 @@ class WIT_Abilities {
             $names = array_flip($modes);
             (new WIT_Translation_Manager())->log_event(0, '', sprintf(
                 /* translators: 1: field, 2: old mode, 3: new mode */
-                __('WPML desde Claude: campo «%1$s» de %2$s a %3$s', 'wpml-imagina-translate'),
-                $field, $before === null ? 'sin configurar' : $names[$before], $mode
-            ));
+                __('WPML %4$s: campo «%1$s» de %2$s a %3$s', 'wpml-imagina-translate'),
+                $field, $before === null ? 'sin configurar' : $names[$before], $mode, self::from()
+            ), self::via());
             return array('custom_field' => $field, 'before' => $before === null ? 'not set' : $names[$before], 'now' => $mode);
         }
 
@@ -1218,7 +1257,7 @@ class WIT_Abilities {
                 'title'    => $log['post_title'],
                 'from'     => $log['source_lang'],
                 'to'       => $log['target_lang'],
-                'via'      => $log['ai_provider'] === 'mcp' ? 'claude (mcp)' : 'api (' . $log['ai_provider'] . ')',
+                'via'      => $log['ai_provider'] === 'mcp' ? 'claude (mcp)' : ($log['ai_provider'] === 'panel' ? 'panel' : 'api (' . $log['ai_provider'] . ')'),
                 'status'   => $log['status'],
                 'message'  => $log['message'],
                 'api_tokens' => isset($log['input_tokens']) ? (int) $log['input_tokens'] + (int) $log['output_tokens'] : 0,

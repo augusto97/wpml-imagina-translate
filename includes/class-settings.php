@@ -12,8 +12,6 @@ class WIT_Settings {
     private static $instance = null;
     private $option_name = 'wit_settings';
 
-    /** Screen id of the settings page, as returned by add_submenu_page(). */
-    private $page_hook = '';
 
     /**
      * Set while the plugin itself writes an already-validated settings array,
@@ -31,9 +29,6 @@ class WIT_Settings {
     }
 
     private function __construct() {
-        // Priority 20: the parent menu is registered by the dashboard at the
-        // default priority, and a submenu cannot be attached before it exists.
-        add_action('admin_menu', array($this, 'add_settings_page'), 20);
         add_action('admin_init', array($this, 'register_settings'));
 
         // Not admin_init: wp-admin/includes/menu.php runs the access check and
@@ -41,9 +36,7 @@ class WIT_Settings {
         // hooked there never ran. This action is fired immediately before that
         // wp_die() and is the only point early enough to intercept it.
         add_action('admin_page_access_denied', array($this, 'redirect_legacy_settings_url'));
-        add_action('admin_enqueue_scripts', array($this, 'enqueue_assets'));
         add_action('admin_notices', array($this, 'missing_api_key_notice'));
-        add_action('admin_post_wit_revoke_connection', array($this, 'handle_revoke_connection'));
 
         // "Ajustes" straight from the plugins list, where people look first.
         add_filter('plugin_action_links_' . WIT_PLUGIN_BASENAME, array($this, 'add_action_links'));
@@ -151,6 +144,52 @@ class WIT_Settings {
     }
 
     /**
+     * Save settings coming from the admin app.
+     *
+     * Partial: only the keys sent change. The form sanitizer expects a full
+     * form submission — an absent checkbox means "off", an empty key means
+     * "keep" — so the current values are laid under the changes first. And
+     * it runs explicitly: WordPress attaches it in admin_init, which REST
+     * requests never fire, so update_option() alone would store the input
+     * unsanitized.
+     *
+     * @param array $changes
+     * @return array The stored settings.
+     */
+    public function save_from_panel(array $changes) {
+        $current = $this->get_settings();
+        $input   = $current;
+
+        // Keys are write-only: never echoed back, so never resubmitted.
+        foreach (array('openai', 'claude', 'gemini') as $name) {
+            $input[$name . '_api_key'] = '';
+        }
+
+        foreach ($changes as $key => $value) {
+            $input[$key] = $value;
+        }
+
+        $input['use_wpml_fields_shown'] = 1;
+
+        foreach (array('translate_meta_fields', 'enable_translation_memory', 'mcp_enabled', 'use_wpml_fields') as $flag) {
+            if (empty($input[$flag])) {
+                unset($input[$flag]);
+            }
+        }
+
+        $clean = $this->sanitize_settings($input);
+
+        $this->internal_write = true;
+        try {
+            update_option($this->option_name, $clean, false);
+        } finally {
+            $this->internal_write = false;
+        }
+
+        return $this->get_settings();
+    }
+
+    /**
      * Add a direct "Ajustes" link to the plugin's row on the plugins screen.
      *
      * @param string[] $links
@@ -183,15 +222,11 @@ class WIT_Settings {
             return;
         }
 
+        // Only on the plugins list: the plugin's own screens guide the
+        // setup themselves.
         $screen = get_current_screen();
 
-        if (!$screen || $screen->id === $this->page_hook) {
-            return; // Already on the page that fixes it.
-        }
-
-        $relevant = ($screen->id === 'plugins' || strpos($screen->id, 'wpml-ia-translate') !== false);
-
-        if (!$relevant) {
+        if (!$screen || $screen->id !== 'plugins') {
             return;
         }
 
@@ -232,60 +267,7 @@ class WIT_Settings {
         exit;
     }
 
-    /**
-     * Enqueue JS/CSS on the settings page
-     */
-    public function enqueue_assets($hook) {
-        // Compared against the hook add_submenu_page() actually returned: the
-        // screen id is derived from the parent menu, so hardcoding it breaks
-        // silently whenever the page moves.
-        if (!$this->page_hook || $hook !== $this->page_hook) {
-            return;
-        }
 
-        wp_enqueue_style(
-            'wit-admin-css',
-            WIT_PLUGIN_URL . 'assets/css/admin.css',
-            array(),
-            WIT_VERSION
-        );
-
-        wp_enqueue_script(
-            'wit-admin-js',
-            WIT_PLUGIN_URL . 'assets/js/admin.js',
-            array('jquery'),
-            WIT_VERSION,
-            true
-        );
-
-        wp_localize_script('wit-admin-js', 'witAdmin', array(
-            'ajax_url' => admin_url('admin-ajax.php'),
-            'nonce'    => wp_create_nonce('wit_ajax_nonce'),
-            'strings'  => array(
-                'translating'    => __('Traduciendo...', 'wpml-imagina-translate'),
-                'success'        => __('Traducción completada', 'wpml-imagina-translate'),
-                'error'          => __('Error en la traducción', 'wpml-imagina-translate'),
-                'confirm_batch'  => __('¿Está seguro de que desea traducir los posts seleccionados?', 'wpml-imagina-translate'),
-            ),
-        ));
-    }
-
-    /**
-     * Add settings page to WordPress admin
-     */
-    public function add_settings_page() {
-        // Under the plugin's own menu rather than Settings: a plugin with a
-        // top-level menu that hides its configuration elsewhere is a plugin
-        // whose API key nobody can find.
-        $this->page_hook = add_submenu_page(
-            'wpml-ia-translate',
-            __('Ajustes de WPML IA Translate', 'wpml-imagina-translate'),
-            __('Ajustes', 'wpml-imagina-translate'),
-            'manage_options',
-            'wpml-imagina-translate-settings',
-            array($this, 'render_settings_page')
-        );
-    }
 
     /**
      * Register settings
@@ -389,367 +371,7 @@ class WIT_Settings {
         return $submitted !== '' ? $submitted : $current;
     }
 
-    /**
-     * Render an API key field that never exposes the stored secret.
-     *
-     * @param string $name  Provider slug.
-     * @param string $value Stored key.
-     */
-    private function render_api_key_field($name, $value) {
-        $has_key = ($value !== '');
-        $field   = $name . '_api_key';
-        ?>
-        <input type="password"
-               name="<?php echo esc_attr($this->option_name); ?>[<?php echo esc_attr($field); ?>]"
-               id="<?php echo esc_attr($field); ?>"
-               value=""
-               autocomplete="new-password"
-               spellcheck="false"
-               placeholder="<?php echo esc_attr(
-                   $has_key
-                       ? __('Guardada — deja el campo vacío para conservarla', 'wpml-imagina-translate')
-                       : __('Introduce tu API key', 'wpml-imagina-translate')
-               ); ?>"
-               class="regular-text">
-        <?php if ($has_key) : ?>
-            <p>
-                <label>
-                    <input type="checkbox"
-                           name="<?php echo esc_attr($this->option_name); ?>[clear_<?php echo esc_attr($field); ?>]"
-                           value="1">
-                    <?php esc_html_e('Borrar la API key guardada', 'wpml-imagina-translate'); ?>
-                </label>
-            </p>
-        <?php endif; ?>
-        <?php
-    }
 
-    /**
-     * Render settings page
-     */
-    public function render_settings_page() {
-        if (!current_user_can('manage_options')) {
-            return;
-        }
-
-        $settings = $this->get_settings();
-        ?>
-        <div class="wrap">
-            <h1><?php echo esc_html(get_admin_page_title()); ?></h1>
-
-            <?php
-            // WordPress prints "Settings saved" by itself only on pages under
-            // the Settings menu. This page moved to the plugin's own menu in
-            // 1.2.1, and saving has given no feedback at all since.
-            settings_errors();
-
-            if (isset($_GET['wit-revoked'])) : // phpcs:ignore WordPress.Security.NonceVerification -- display only.
-                ?>
-                <div class="notice notice-success is-dismissible"><p><?php esc_html_e('Conexión revocada. Claude ya no puede acceder con ella.', 'wpml-imagina-translate'); ?></p></div>
-            <?php endif; ?>
-
-            <form method="post" action="options.php">
-                <?php
-                settings_fields('wit_settings_group');
-                ?>
-
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">
-                            <label for="ai_provider"><?php _e('Proveedor de IA', 'wpml-imagina-translate'); ?></label>
-                        </th>
-                        <td>
-                            <select name="<?php echo esc_attr($this->option_name); ?>[ai_provider]" id="ai_provider" class="regular-text">
-                                <option value="openai" <?php selected($settings['ai_provider'], 'openai'); ?>>OpenAI (GPT)</option>
-                                <option value="claude" <?php selected($settings['ai_provider'], 'claude'); ?>>Anthropic Claude</option>
-                                <option value="gemini" <?php selected($settings['ai_provider'], 'gemini'); ?>>Google Gemini</option>
-                            </select>
-                            <p class="description"><?php _e('Selecciona el proveedor de IA que quieres usar', 'wpml-imagina-translate'); ?></p>
-                        </td>
-                    </tr>
-                </table>
-
-                <div class="wit-provider-section" data-provider="openai"<?php echo $settings['ai_provider'] === 'openai' ? '' : ' style="display:none;"'; ?>>
-                <h2 class="title"><?php _e('Configuración de OpenAI', 'wpml-imagina-translate'); ?></h2>
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">
-                            <label for="openai_api_key"><?php _e('OpenAI API Key', 'wpml-imagina-translate'); ?></label>
-                        </th>
-                        <td>
-                            <?php $this->render_api_key_field('openai', $settings['openai_api_key']); ?>
-                            <p class="description">
-                                <?php _e('Obtén tu API key en', 'wpml-imagina-translate'); ?>
-                                <a href="https://platform.openai.com/api-keys" target="_blank">platform.openai.com/api-keys</a>
-                            </p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">
-                            <label for="openai_model"><?php _e('Modelo OpenAI', 'wpml-imagina-translate'); ?></label>
-                        </th>
-                        <td>
-                            <select name="<?php echo esc_attr($this->option_name); ?>[openai_model]"
-                                    id="openai_model"
-                                    class="regular-text wit-model-select"
-                                    data-provider="openai"
-                                    data-key-field="openai_api_key"
-                                    data-saved="<?php echo esc_attr($settings['openai_model']); ?>">
-                                <option value="<?php echo esc_attr($settings['openai_model']); ?>" selected>
-                                    <?php echo esc_html($settings['openai_model'] ?: __('— Carga la lista para seleccionar —', 'wpml-imagina-translate')); ?>
-                                </option>
-                            </select>
-                            <button type="button" class="button wit-refresh-models"
-                                    data-target="openai_model"
-                                    data-provider="openai"
-                                    data-key-field="openai_api_key">
-                                ↻ <?php _e('Actualizar lista', 'wpml-imagina-translate'); ?>
-                            </button>
-                            <span class="wit-models-status"></span>
-                            <p class="description"><?php _e('La lista se carga automáticamente al abrir esta página si hay una API key guardada.', 'wpml-imagina-translate'); ?></p>
-                        </td>
-                    </tr>
-                </table>
-                </div>
-
-                <div class="wit-provider-section" data-provider="claude"<?php echo $settings['ai_provider'] === 'claude' ? '' : ' style="display:none;"'; ?>>
-                <h2 class="title"><?php _e('Configuración de Claude', 'wpml-imagina-translate'); ?></h2>
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">
-                            <label for="claude_api_key"><?php _e('Claude API Key', 'wpml-imagina-translate'); ?></label>
-                        </th>
-                        <td>
-                            <?php $this->render_api_key_field('claude', $settings['claude_api_key']); ?>
-                            <p class="description">
-                                <?php _e('Obtén tu API key en', 'wpml-imagina-translate'); ?>
-                                <a href="https://console.anthropic.com/" target="_blank">console.anthropic.com</a>
-                            </p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">
-                            <label for="claude_model"><?php _e('Modelo Claude', 'wpml-imagina-translate'); ?></label>
-                        </th>
-                        <td>
-                            <select name="<?php echo esc_attr($this->option_name); ?>[claude_model]"
-                                    id="claude_model"
-                                    class="regular-text wit-model-select"
-                                    data-provider="claude"
-                                    data-key-field="claude_api_key"
-                                    data-saved="<?php echo esc_attr($settings['claude_model']); ?>">
-                                <option value="<?php echo esc_attr($settings['claude_model']); ?>" selected>
-                                    <?php echo esc_html($settings['claude_model'] ?: __('— Carga la lista para seleccionar —', 'wpml-imagina-translate')); ?>
-                                </option>
-                            </select>
-                            <button type="button" class="button wit-refresh-models"
-                                    data-target="claude_model"
-                                    data-provider="claude"
-                                    data-key-field="claude_api_key">
-                                ↻ <?php _e('Actualizar lista', 'wpml-imagina-translate'); ?>
-                            </button>
-                            <span class="wit-models-status"></span>
-                            <p class="description"><?php _e('La lista se carga automáticamente al abrir esta página si hay una API key guardada.', 'wpml-imagina-translate'); ?></p>
-                        </td>
-                    </tr>
-                </table>
-                </div>
-
-                <div class="wit-provider-section" data-provider="gemini"<?php echo $settings['ai_provider'] === 'gemini' ? '' : ' style="display:none;"'; ?>>
-                <h2 class="title"><?php _e('Configuración de Gemini', 'wpml-imagina-translate'); ?></h2>
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">
-                            <label for="gemini_api_key"><?php _e('Gemini API Key', 'wpml-imagina-translate'); ?></label>
-                        </th>
-                        <td>
-                            <?php $this->render_api_key_field('gemini', $settings['gemini_api_key']); ?>
-                            <p class="description">
-                                <?php _e('Obtén tu API key en', 'wpml-imagina-translate'); ?>
-                                <a href="https://aistudio.google.com/app/apikey" target="_blank">aistudio.google.com/app/apikey</a>
-                            </p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">
-                            <label for="gemini_model"><?php _e('Modelo Gemini', 'wpml-imagina-translate'); ?></label>
-                        </th>
-                        <td>
-                            <select name="<?php echo esc_attr($this->option_name); ?>[gemini_model]"
-                                    id="gemini_model"
-                                    class="regular-text wit-model-select"
-                                    data-provider="gemini"
-                                    data-key-field="gemini_api_key"
-                                    data-saved="<?php echo esc_attr($settings['gemini_model']); ?>">
-                                <option value="<?php echo esc_attr($settings['gemini_model']); ?>" selected>
-                                    <?php echo esc_html($settings['gemini_model'] ?: __('— Carga la lista para seleccionar —', 'wpml-imagina-translate')); ?>
-                                </option>
-                            </select>
-                            <button type="button" class="button wit-refresh-models"
-                                    data-target="gemini_model"
-                                    data-provider="gemini"
-                                    data-key-field="gemini_api_key">
-                                ↻ <?php _e('Actualizar lista', 'wpml-imagina-translate'); ?>
-                            </button>
-                            <span class="wit-models-status"></span>
-                            <p class="description"><?php _e('La lista se carga automáticamente al abrir esta página si hay una API key guardada.', 'wpml-imagina-translate'); ?></p>
-                        </td>
-                    </tr>
-                </table>
-                </div>
-
-                <h2 class="title"><?php _e('Ajustes de Traducción', 'wpml-imagina-translate'); ?></h2>
-                <table class="form-table">
-                    <tr>
-                        <th scope="row">
-                            <label for="translation_prompt"><?php _e('Prompt de Traducción', 'wpml-imagina-translate'); ?></label>
-                        </th>
-                        <td>
-                            <textarea name="<?php echo esc_attr($this->option_name); ?>[translation_prompt]"
-                                      id="translation_prompt"
-                                      rows="5"
-                                      class="large-text"><?php echo esc_textarea($settings['translation_prompt']); ?></textarea>
-                            <p class="description">
-                                <?php _e('Usa {target_language} como placeholder para el idioma destino.', 'wpml-imagina-translate'); ?>
-                            </p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">
-                            <label for="translate_meta_fields">
-                                <?php _e('Traducir Meta Fields', 'wpml-imagina-translate'); ?>
-                            </label>
-                        </th>
-                        <td>
-                            <label>
-                                <input type="checkbox"
-                                       name="<?php echo esc_attr($this->option_name); ?>[translate_meta_fields]"
-                                       id="translate_meta_fields"
-                                       value="1"
-                                       <?php checked($settings['translate_meta_fields'], true); ?>>
-                                <?php _e('Traducir automáticamente meta fields (SEO, excerpt, etc.)', 'wpml-imagina-translate'); ?>
-                            </label>
-                        </td>
-                    </tr>
-                    <?php if (WIT_WPML_Native::is_active()) : ?>
-                    <tr>
-                        <th scope="row"><label for="use_wpml_fields"><?php esc_html_e('Campos según WPML', 'wpml-imagina-translate'); ?></label></th>
-                        <td>
-                            <input type="hidden" name="<?php echo esc_attr($this->option_name); ?>[use_wpml_fields_shown]" value="1">
-                            <label>
-                                <input type="checkbox" name="<?php echo esc_attr($this->option_name); ?>[use_wpml_fields]" id="use_wpml_fields" value="1" <?php checked(!empty($settings['use_wpml_fields'])); ?>>
-                                <?php esc_html_e('Traducir también los campos que WPML tiene configurados como «Traducir»', 'wpml-imagina-translate'); ?>
-                            </label>
-                            <p class="description"><?php esc_html_e('Incluye los que declaran Yoast, Rank Math, ACF y otros plugins compatibles con WPML. Los campos que WPML marca como «No traducir» tampoco se copian a la traducción.', 'wpml-imagina-translate'); ?></p>
-                        </td>
-                    </tr>
-                <?php endif; ?>
-                <tr>
-                        <th scope="row">
-                            <label for="meta_fields_list"><?php _e('Lista de Meta Fields', 'wpml-imagina-translate'); ?></label>
-                        </th>
-                        <td>
-                            <textarea name="<?php echo esc_attr($this->option_name); ?>[meta_fields_list]"
-                                      id="meta_fields_list"
-                                      rows="4"
-                                      class="large-text"><?php echo esc_textarea($settings['meta_fields_list']); ?></textarea>
-                            <p class="description">
-                                <?php _e('Lista separada por comas de meta fields a traducir. Ejemplo: _yoast_wpseo_title,_yoast_wpseo_metadesc', 'wpml-imagina-translate'); ?>
-                            </p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">
-                            <label for="batch_size"><?php _e('Tamaño de Lote', 'wpml-imagina-translate'); ?></label>
-                        </th>
-                        <td>
-                            <input type="number"
-                                   name="<?php echo esc_attr($this->option_name); ?>[batch_size]"
-                                   id="batch_size"
-                                   value="<?php echo esc_attr($settings['batch_size']); ?>"
-                                   min="1"
-                                   max="50"
-                                   class="small-text">
-                            <p class="description">
-                                <?php _e('Número de posts a procesar en cada lote de traducción.', 'wpml-imagina-translate'); ?>
-                            </p>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">
-                            <label for="glossary"><?php _e('Glosario', 'wpml-imagina-translate'); ?></label>
-                        </th>
-                        <td>
-                            <textarea name="<?php echo esc_attr($this->option_name); ?>[glossary]"
-                                      id="glossary"
-                                      rows="8"
-                                      class="large-text code"
-                                      spellcheck="false"
-                                      placeholder="Imagina&#10;Servicios = Services&#10;[en] Inicio = Home"><?php echo esc_textarea($settings['glossary']); ?></textarea>
-                            <p class="description">
-                                <?php _e('Una regla por línea. Las reglas tienen prioridad sobre el criterio de la IA.', 'wpml-imagina-translate'); ?>
-                            </p>
-                            <ul class="description" style="margin-left:1.5em;list-style:disc;">
-                                <li><code>Imagina</code> — <?php _e('nunca se traduce, en ningún idioma', 'wpml-imagina-translate'); ?></li>
-                                <li><code>Servicios = Services</code> — <?php _e('traducción fija en todos los idiomas', 'wpml-imagina-translate'); ?></li>
-                                <li><code>[en] Inicio = Home</code> — <?php _e('solo para inglés', 'wpml-imagina-translate'); ?></li>
-                                <li><code>[fr,de] Contacto = Kontakt</code> — <?php _e('para varios idiomas', 'wpml-imagina-translate'); ?></li>
-                                <li><code># comentario</code> — <?php _e('las líneas que empiezan por # se ignoran', 'wpml-imagina-translate'); ?></li>
-                            </ul>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th scope="row">
-                            <label for="enable_translation_memory">
-                                <?php _e('Memoria de Traducción', 'wpml-imagina-translate'); ?>
-                            </label>
-                        </th>
-                        <td>
-                            <label>
-                                <input type="checkbox"
-                                       name="<?php echo esc_attr($this->option_name); ?>[enable_translation_memory]"
-                                       id="enable_translation_memory"
-                                       value="1"
-                                       <?php checked($settings['enable_translation_memory'], true); ?>>
-                                <?php _e('Reutilizar traducciones ya realizadas', 'wpml-imagina-translate'); ?>
-                            </label>
-                            <p class="description">
-                                <?php _e('Evita pagar dos veces por la misma frase y garantiza que se traduzca igual en todo el sitio. Recomendado.', 'wpml-imagina-translate'); ?>
-                            </p>
-                            <?php
-                            $memory_stats = WIT_Translation_Memory::instance()->stats();
-                            if ($memory_stats['entries'] > 0) :
-                                ?>
-                                <p>
-                                    <strong><?php
-                                        printf(
-                                            /* translators: 1: stored entries, 2: times reused */
-                                            esc_html__('%1$s cadenas guardadas, reutilizadas %2$s veces.', 'wpml-imagina-translate'),
-                                            esc_html(number_format_i18n($memory_stats['entries'])),
-                                            esc_html(number_format_i18n($memory_stats['reuses']))
-                                        );
-                                    ?></strong>
-                                </p>
-                                <p>
-                                    <button type="button" class="button" id="wit-clear-memory">
-                                        <?php esc_html_e('Vaciar memoria', 'wpml-imagina-translate'); ?>
-                                    </button>
-                                    <span id="wit-clear-memory-status"></span>
-                                </p>
-                            <?php endif; ?>
-                        </td>
-                    </tr>
-                </table>
-
-                <?php $this->render_mcp_settings($settings); ?>
-
-                <?php submit_button(); ?>
-            </form>
-
-            <?php $this->render_mcp_connections(); ?>
-        </div>
-        <?php
-    }
 
     /**
      * Problems that would stop Claude from connecting, in plain words.
@@ -776,120 +398,6 @@ class WIT_Settings {
         }
 
         return $problems;
-    }
-
-    private function render_mcp_settings(array $settings) {
-        $problems = $this->mcp_requirement_problems();
-        $url      = class_exists('WIT_OAuth') ? WIT_OAuth::resource_url() : '';
-        ?>
-        <h2 class="title"><?php esc_html_e('Conexión con Claude (MCP)', 'wpml-imagina-translate'); ?></h2>
-        <p class="description" style="max-width:720px;">
-            <?php esc_html_e('Traduce, revisa y consulta el estado desde el chat de Claude. La traducción la hace Claude con tu suscripción: por este camino nunca se usa la API key de este sitio, así que no hay gasto por tokens.', 'wpml-imagina-translate'); ?>
-        </p>
-        <table class="form-table">
-            <tr>
-                <th scope="row"><label for="mcp_enabled"><?php esc_html_e('Activar', 'wpml-imagina-translate'); ?></label></th>
-                <td>
-                    <label>
-                        <input type="checkbox"
-                               name="<?php echo esc_attr($this->option_name); ?>[mcp_enabled]"
-                               id="mcp_enabled"
-                               value="1"
-                               <?php checked(!empty($settings['mcp_enabled'])); ?>>
-                        <?php esc_html_e('Permitir que Claude se conecte a este sitio', 'wpml-imagina-translate'); ?>
-                    </label>
-                    <?php if (!empty($problems)) : ?>
-                        <div class="notice notice-warning inline" style="margin:10px 0 0;">
-                            <?php foreach ($problems as $problem) : ?>
-                                <p><?php echo esc_html($problem); ?></p>
-                            <?php endforeach; ?>
-                        </div>
-                    <?php endif; ?>
-                </td>
-            </tr>
-            <?php if (!empty($settings['mcp_enabled']) && $url !== '') : ?>
-                <tr>
-                    <th scope="row"><label for="wit-mcp-url"><?php esc_html_e('URL del conector', 'wpml-imagina-translate'); ?></label></th>
-                    <td>
-                        <input type="text" id="wit-mcp-url" class="large-text code" readonly value="<?php echo esc_attr($url); ?>" onclick="this.select();">
-                        <ol class="description" style="margin-left:1.5em;">
-                            <li><?php esc_html_e('En Claude, abre Personalizar → Conectores → Añadir conector personalizado.', 'wpml-imagina-translate'); ?></li>
-                            <li><?php esc_html_e('Pega esta URL exactamente como aparece y pulsa Añadir.', 'wpml-imagina-translate'); ?></li>
-                            <li><?php esc_html_e('Pulsa Conectar: se abrirá este sitio para que inicies sesión y apruebes el acceso.', 'wpml-imagina-translate'); ?></li>
-                        </ol>
-                        <p class="description"><?php esc_html_e('Claude actuará con los permisos de la cuenta con la que apruebes. Para limitar lo que puede hacer, apruébalo con una cuenta de rol Editor.', 'wpml-imagina-translate'); ?></p>
-                    </td>
-                </tr>
-            <?php endif; ?>
-        </table>
-        <?php
-    }
-
-    /**
-     * Active Claude connections, with a revoke button each.
-     *
-     * Outside the settings form: revoking must not also save the settings.
-     */
-    private function render_mcp_connections() {
-        if (!class_exists('WIT_OAuth') || !WIT_OAuth::is_enabled()) {
-            return;
-        }
-
-        $connections = WIT_OAuth::connections();
-        ?>
-        <h2 class="title"><?php esc_html_e('Conexiones activas', 'wpml-imagina-translate'); ?></h2>
-        <?php if (empty($connections)) : ?>
-            <p class="description"><?php esc_html_e('Todavía no hay ninguna conexión.', 'wpml-imagina-translate'); ?></p>
-        <?php else : ?>
-            <div class="wit-table-scroll">
-            <table class="widefat striped" style="max-width:900px;">
-                <thead>
-                    <tr>
-                        <th><?php esc_html_e('Aplicación', 'wpml-imagina-translate'); ?></th>
-                        <th><?php esc_html_e('Cuenta', 'wpml-imagina-translate'); ?></th>
-                        <th><?php esc_html_e('Conectada', 'wpml-imagina-translate'); ?></th>
-                        <th><?php esc_html_e('Último uso', 'wpml-imagina-translate'); ?></th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php foreach ($connections as $connection) : ?>
-                        <tr>
-                            <td><?php echo esc_html($connection['client_name'] !== '' ? $connection['client_name'] : 'Claude'); ?></td>
-                            <td><?php echo esc_html($connection['user']); ?></td>
-                            <td><?php echo esc_html(get_date_from_gmt($connection['created_at'], get_option('date_format') . ' ' . get_option('time_format'))); ?></td>
-                            <td><?php echo esc_html($connection['last_used_at'] ? get_date_from_gmt($connection['last_used_at'], get_option('date_format') . ' ' . get_option('time_format')) : '—'); ?></td>
-                            <td>
-                                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin:0;">
-                                    <input type="hidden" name="action" value="wit_revoke_connection">
-                                    <input type="hidden" name="grant" value="<?php echo esc_attr($connection['grant_id']); ?>">
-                                    <?php wp_nonce_field('wit_revoke_' . $connection['grant_id']); ?>
-                                    <button type="submit" class="button button-small"><?php esc_html_e('Revocar', 'wpml-imagina-translate'); ?></button>
-                                </form>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                </tbody>
-            </table>
-            </div>
-        <?php endif; ?>
-        <?php
-    }
-
-    /**
-     * admin-post handler for the revoke buttons.
-     */
-    public function handle_revoke_connection() {
-        $grant = isset($_POST['grant']) ? sanitize_text_field(wp_unslash($_POST['grant'])) : '';
-
-        if (!current_user_can('manage_options') || !check_admin_referer('wit_revoke_' . $grant)) {
-            wp_die(esc_html__('No tienes permisos', 'wpml-imagina-translate'), '', array('response' => 403));
-        }
-
-        WIT_OAuth::instance()->revoke_grant($grant);
-
-        wp_safe_redirect(add_query_arg('wit-revoked', '1', $this->settings_url()));
-        exit;
     }
 
     /**
