@@ -41,3 +41,8 @@ export function formatRelativeTime(input: string): string {
   const diffDay = Math.round(diffHr / 24);
   return rtf.format(diffDay, 'day');
 }
+
+/** «1 cadena», «3 cadenas»: el número ya formateado y la palabra que toca. */
+export function plural(n: number, one: string, many: string): string {
+  return `${formatNumber(n)} ${n === 1 ? one : many}`;
+}

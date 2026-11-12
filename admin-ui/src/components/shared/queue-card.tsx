@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Loader2, Square, XCircle } from 'lucide-react';
 import { api } from '@/lib/api';
 import { notify } from '@/lib/toast';
+import { plural } from '@/lib/format';
 import { languageName } from '@/lib/languages';
 import type { QueueSummary } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -27,7 +28,7 @@ export function QueueCard({ initial }: { initial?: QueueSummary }) {
   const cancel = useMutation({
     mutationFn: () => api.del<{ removed: number }>('queue'),
     onSuccess: (r) => {
-      notify(`Cola detenida: ${r.removed} contenidos ya no se traducirán.`, 'info');
+      notify(`Cola detenida: ${plural(r.removed, 'contenido ya no se traducirá', 'contenidos ya no se traducirán')}.`, 'info');
       void client.invalidateQueries({ queryKey: ['queue'] });
     },
   });

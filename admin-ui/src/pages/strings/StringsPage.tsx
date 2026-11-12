@@ -5,7 +5,7 @@ import { Check, CheckCircle2, Languages, Loader2, Pencil, Search, Sparkles, Squa
 import { api, config } from '@/lib/api';
 import { notify, notifyError } from '@/lib/toast';
 import { languageName, queryParam, rememberLanguage, rememberedLanguage, setQueryParams, targetLanguages } from '@/lib/languages';
-import { formatNumber } from '@/lib/format';
+import { formatNumber, plural } from '@/lib/format';
 import type { StringItem } from '@/types';
 import { AppShell } from '@/components/app-shell';
 import { Card, CardContent } from '@/components/ui/card';
@@ -173,8 +173,8 @@ export function StringsPage() {
       }
       notify(
         cancelRef.current
-          ? `Detenido: ${formatNumber(state.done)} cadenas traducidas.`
-          : `Listo: ${formatNumber(state.done)} cadenas traducidas al ${languageName(language)}${state.errors ? `, ${state.errors} con error` : ''}.`,
+          ? `Detenido: ${plural(state.done, 'cadena traducida', 'cadenas traducidas')}.`
+          : `Listo: ${plural(state.done, 'cadena traducida', 'cadenas traducidas')} al ${languageName(language)}${state.errors ? `, ${state.errors} con error` : ''}.`,
         state.errors && !state.done ? 'error' : 'success',
       );
     } catch (e) {
@@ -393,7 +393,7 @@ export function StringsPage() {
       <ConfirmDialog
         open={confirmAll}
         onOpenChange={setConfirmAll}
-        title={`Traducir ${formatNumber(data?.total ?? 0)} cadenas al ${languageName(language)}`}
+        title={`Traducir ${plural(data?.total ?? 0, 'cadena', 'cadenas')} al ${languageName(language)}`}
         confirmLabel="Empezar"
         onConfirm={() => void runAll()}
       >

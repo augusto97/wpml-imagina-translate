@@ -430,7 +430,9 @@ class WIT_Admin_REST {
             'id'          => (int) $log['id'],
             'kind'        => $kind,
             'post_id'     => (int) $log['post_id'],
-            'title'       => html_entity_decode((string) $log['post_title'], ENT_QUOTES, 'UTF-8'),
+            'title'       => $kind === 'strings'
+                ? __('Cadenas de String Translation', 'wpml-imagina-translate')
+                : ($kind === 'settings' ? __('Ajustes del plugin', 'wpml-imagina-translate') : html_entity_decode((string) $log['post_title'], ENT_QUOTES, 'UTF-8')),
             'from'        => (string) $log['source_lang'],
             'to'          => (string) $log['target_lang'],
             'via'         => (string) $log['ai_provider'],

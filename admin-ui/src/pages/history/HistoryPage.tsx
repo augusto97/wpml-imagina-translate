@@ -107,7 +107,7 @@ export function HistoryPage() {
 function What({ row }: { row: LogRow }) {
   const ok = row.status === 'success';
   const Icon = row.kind === 'strings' ? Type : row.kind === 'settings' ? Settings2 : null;
-  const title = row.kind === 'strings' ? 'Cadenas de String Translation' : row.kind === 'settings' ? 'Ajustes' : row.title;
+  const title = row.title;
 
   return (
     <div className="wit-flex wit-min-w-0 wit-max-w-xl wit-items-start wit-gap-2">

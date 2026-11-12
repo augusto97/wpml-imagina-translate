@@ -393,8 +393,9 @@ if [ "$HAS_ABILITIES" != "1" ]; then
   "$WP" eval '$s = get_option("wit_settings"); $s["mcp_enabled"] = true; update_option("wit_settings", $s, false);' >/dev/null
   code=$("${CURL[@]}" -o /dev/null -w '%{http_code}' -X POST "$HOST/wp-json/wit/v1/mcp" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"ping"}')
   [ "$code" = "404" ] && ok "sin Abilities API, el endpoint MCP no existe (404) aunque esté activado" || bad "endpoint MCP respondió $code en WordPress sin Abilities API"
-  notice=$("${CURL[@]}" -b "$JAR" "$HOST/wp-admin/admin.php?page=wpml-imagina-translate-settings")
-  printf '%s' "$notice" | grep -q "Requiere WordPress 6.9" && ok "Ajustes explica que hace falta WordPress 6.9" || bad "Ajustes no avisa del requisito de WordPress 6.9"
+  # The Ajustes screen lists these requirements from the API, before MCP is
+  # even switched on.
+  rcheck "Ajustes explica que hace falta WordPress 6.9" 200 GET "settings" "" "any('WordPress 6.9' in p for p in d['mcp']['problems'])"
   "$WP" eval '$s = get_option("wit_settings"); $s["mcp_enabled"] = false; update_option("wit_settings", $s, false);' >/dev/null
   check_log "sin abilities"
 else

@@ -39,7 +39,7 @@ export function AppShell({ page, title, description, actions, children }: {
               <p className="wit-text-xs wit-text-muted-foreground">Traducción con IA para WPML · v{cfg.version}</p>
             </div>
           </div>
-          <nav aria-label="Secciones" className="wit-flex wit-gap-1 wit-overflow-x-auto wit-rounded-lg wit-border wit-border-border wit-bg-white wit-p-1">
+          <nav aria-label="Secciones" className="wit-flex wit-w-full wit-flex-wrap wit-gap-0.5 wit-rounded-lg wit-border wit-border-border wit-bg-white wit-p-1 sm:wit-w-auto sm:wit-gap-1">
             {items.map((item) => {
               const active = item.slug === page;
               const Icon = item.icon;
@@ -49,7 +49,7 @@ export function AppShell({ page, title, description, actions, children }: {
                   href={pageUrl(item.slug)}
                   aria-current={active ? 'page' : undefined}
                   className={cn(
-                    'wit-flex wit-flex-shrink-0 wit-items-center wit-gap-1.5 wit-whitespace-nowrap wit-rounded-md wit-px-3 wit-py-1.5 wit-text-sm wit-font-medium wit-transition-colors',
+                    'wit-flex wit-flex-shrink-0 wit-items-center wit-gap-1.5 wit-whitespace-nowrap wit-rounded-md wit-px-2 wit-py-1.5 wit-text-[13px] wit-font-medium wit-transition-colors sm:wit-px-3 sm:wit-text-sm',
                     active ? 'wit-bg-slate-900 wit-text-white hover:wit-text-white' : 'wit-text-muted-foreground hover:wit-bg-slate-100 hover:wit-text-foreground',
                   )}
                 >

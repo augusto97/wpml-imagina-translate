@@ -610,7 +610,7 @@ function TranslateConfirm({ confirm, language, pendingCount, editedSelected, bus
       </div>
     );
   } else {
-    title = `Traducir los ${formatNumber(pendingCount)} pendientes al ${language}`;
+    title = pendingCount === 1 ? `Traducir el contenido pendiente al ${language}` : `Traducir los ${formatNumber(pendingCount)} pendientes al ${language}`;
     label = 'Poner en cola';
     body = (
       <p>

@@ -4,7 +4,7 @@ import { BookA, Bot, Brain, Check, Copy, KeyRound, Loader2, PlugZap, RefreshCw, 
 import { api } from '@/lib/api';
 import { notify, notifyError } from '@/lib/toast';
 import { queryParam, setQueryParams } from '@/lib/languages';
-import { formatDateTime, formatNumber, formatRelativeTime } from '@/lib/format';
+import { formatDateTime, formatNumber, formatRelativeTime, plural } from '@/lib/format';
 import { cn } from '@/lib/utils';
 import type { Settings } from '@/types';
 import { AppShell } from '@/components/app-shell';
@@ -375,7 +375,7 @@ function TranslationTab({ data, draft, update }: { data: Settings; draft: Draft;
   const clear = useMutation({
     mutationFn: () => api.del<{ removed: number }>('memory'),
     onSuccess: (r) => {
-      notify(`Memoria vaciada: ${formatNumber(r.removed)} frases olvidadas.`, 'info');
+      notify(`Memoria vaciada: ${plural(r.removed, 'frase olvidada', 'frases olvidadas')}.`, 'info');
       setConfirmClear(false);
       void client.invalidateQueries({ queryKey: ['settings'] });
     },
@@ -462,7 +462,7 @@ function TranslationTab({ data, draft, update }: { data: Settings; draft: Draft;
       </Card>
 
       <ConfirmDialog open={confirmClear} onOpenChange={setConfirmClear} title="Vaciar la memoria de traducción" confirmLabel="Vaciar" destructive busy={clear.isPending} onConfirm={() => clear.mutate()}>
-        Se olvidan las {formatNumber(data.memory.entries)} frases guardadas. Las traducciones ya hechas no cambian, pero las próximas volverán a pasar por la IA.
+        Se {data.memory.entries === 1 ? 'olvida la frase guardada' : `olvidan las ${formatNumber(data.memory.entries)} frases guardadas`}. Las traducciones ya hechas no cambian, pero las próximas volverán a pasar por la IA.
       </ConfirmDialog>
     </div>
   );
@@ -568,7 +568,14 @@ function ClaudeTab({ data, draft, update, dirty }: { data: Settings; draft: Draf
             checked={draft.mcp_enabled}
             onChange={(v) => update('mcp_enabled', v)}
           />
-          {live && data.mcp.problems.map((p) => <Callout key={p} kind="warning">{p}</Callout>)}
+          {/* Requisitos: se ven antes de activarlo, no después de descubrir que no conecta. */}
+          {data.mcp.problems.length > 0 && (
+            <Callout kind="warning" title={live ? 'Claude todavía no puede conectarse' : 'Antes de activarlo'}>
+              <ul className="wit-list-disc wit-space-y-1 wit-pl-4">
+                {data.mcp.problems.map((p) => <li key={p}>{p}</li>)}
+              </ul>
+            </Callout>
+          )}
           {draft.mcp_enabled && (
             <Callout kind="info" title="Consumo de tu suscripción">
               Claude traduce como mucho 10 contenidos por petición. Cada tanda consume de los límites de uso de tu plan de Claude; para cientos de contenidos, la cola con API key de este panel suele ser más práctica.

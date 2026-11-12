@@ -4,7 +4,7 @@ import {
   ArrowRight, CheckCircle2, Circle, Coins, FileText, Languages, RefreshCw, Sparkles, Type, Wand2,
 } from 'lucide-react';
 import { api, config, pageUrl } from '@/lib/api';
-import { formatNumber, formatRelativeTime } from '@/lib/format';
+import { formatNumber, formatRelativeTime, plural } from '@/lib/format';
 import { notify } from '@/lib/toast';
 import { rememberLanguage } from '@/lib/languages';
 import type { Overview } from '@/types';
@@ -146,7 +146,7 @@ function LanguageProgress({ data }: { data: Overview }) {
   const translateAll = useMutation({
     mutationFn: (code: string) => api.post<{ queued: number; skipped: number }>('queue', { language: code, all_pending: true }),
     onSuccess: (r) => {
-      notify(`${r.queued} contenidos en cola. Puedes cerrar la página: el servidor sigue.`);
+      notify(`${plural(r.queued, 'contenido en cola', 'contenidos en cola')}. Puedes cerrar la página: el servidor sigue.`);
       setConfirm(null);
       void client.invalidateQueries({ queryKey: ['queue'] });
       void client.invalidateQueries({ queryKey: ['overview'] });
@@ -203,7 +203,7 @@ function LanguageProgress({ data }: { data: Overview }) {
       <ConfirmDialog
         open={confirm !== null}
         onOpenChange={(o) => !o && setConfirm(null)}
-        title={confirm ? `Traducir ${confirm.counts.pending} contenidos al ${confirm.name}` : ''}
+        title={confirm ? `Traducir ${plural(confirm.counts.pending, 'contenido', 'contenidos')} al ${confirm.name}` : ''}
         confirmLabel="Traducir en segundo plano"
         busy={translateAll.isPending}
         onConfirm={() => confirm && translateAll.mutate(confirm.code)}
@@ -237,7 +237,7 @@ function StringsCard({ data }: { data: Overview }) {
         {data.strings.languages.map((l) => (
           <a key={l.code} href={pageUrl('strings', { to: l.code })} className="wit-flex wit-items-center wit-gap-2 wit-rounded-md wit-border wit-border-border wit-px-3 wit-py-2 wit-text-sm hover:wit-bg-slate-50">
             <span className="wit-font-medium">{l.name}</span>
-            {l.pending > 0 ? <Badge variant="warning">{formatNumber(l.pending)} pendientes</Badge> : <Badge variant="success">al día</Badge>}
+            {l.pending > 0 ? <Badge variant="warning">{formatNumber(l.pending)} {l.pending === 1 ? 'pendiente' : 'pendientes'}</Badge> : <Badge variant="success">al día</Badge>}
           </a>
         ))}
       </CardContent>
