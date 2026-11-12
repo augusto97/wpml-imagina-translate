@@ -64,13 +64,21 @@ jobs:
     # connection is exercised end to end with the official MCP SDK client,
     # and on one without the Abilities API, where it must switch itself off
     # cleanly while the rest of the plugin keeps working.
-    name: Integración (WordPress ${{ matrix.wp }})
+    name: Integración (WordPress ${{ matrix.wp }}, WPML ${{ matrix.wpml }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        wp: ['7.1.2', '6.8.2']
+        include:
+          # WPML's documented hooks, answered by a test double.
+          - wp: '7.1.2'
+            wpml: doble
+          - wp: '6.8.2'
+            wpml: doble
+          # The real WPML and String Translation, from the ZIPs kept on main.
+          - wp: '7.1.2'
+            wpml: real
 
     env:
       WIT_TEST_DIR: ${{ github.workspace }}/../wit-integration
@@ -122,10 +130,31 @@ jobs:
           path: ${{ env.WIT_TEST_DIR }}/cache
           key: wit-cache-wp${{ matrix.wp }}-wpcli2.11.0-elementor4.0.8
 
+      - name: Obtener WPML real
+        if: matrix.wpml == 'real'
+        id: wpml
+        run: |
+          # WPML is not free, so it is never downloaded: it is the copy the
+          # site owner keeps on the main branch. Without it, this job says so
+          # and stops; it does not fail.
+          mkdir -p "$RUNNER_TEMP/wpml"
+          if git fetch -q --depth=1 origin main \
+             && git show FETCH_HEAD:Wpml.zip > "$RUNNER_TEMP/wpml/Wpml.zip" 2>/dev/null \
+             && git show FETCH_HEAD:String.zip > "$RUNNER_TEMP/wpml/String.zip" 2>/dev/null; then
+            echo "WIT_WPML_ZIP=$RUNNER_TEMP/wpml/Wpml.zip" >> "$GITHUB_ENV"
+            echo "WIT_WPML_ST_ZIP=$RUNNER_TEMP/wpml/String.zip" >> "$GITHUB_ENV"
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=WPML real::Los ZIP de WPML no están en main; la prueba contra WPML real se omite."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Construir la instalación
+        if: matrix.wpml != 'real' || steps.wpml.outputs.available == 'true'
         run: tests/integration/setup.sh
 
       - name: Ejecutar la suite
+        if: matrix.wpml != 'real' || steps.wpml.outputs.available == 'true'
         run: tests/integration/run.sh
 
       - name: Registros en caso de fallo

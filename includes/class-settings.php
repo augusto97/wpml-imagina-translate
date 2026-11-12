@@ -344,6 +344,11 @@ class WIT_Settings {
         $sanitized['translate_meta_fields']     = !empty($input['translate_meta_fields']);
         $sanitized['enable_translation_memory'] = !empty($input['enable_translation_memory']);
         $sanitized['mcp_enabled']               = !empty($input['mcp_enabled']);
+        // The checkbox only exists when WPML is active; without it the value
+        // is kept, not switched off by a form that never showed it.
+        $sanitized['use_wpml_fields']           = array_key_exists('use_wpml_fields_shown', (array) $input)
+            ? !empty($input['use_wpml_fields'])
+            : !empty($current['use_wpml_fields']);
         $sanitized['batch_size']                = isset($input['batch_size']) ? min(50, max(1, absint($input['batch_size']))) : 5;
 
         // Meta keys only: strip anything that is not a valid meta key so the
@@ -626,7 +631,20 @@ class WIT_Settings {
                             </label>
                         </td>
                     </tr>
+                    <?php if (WIT_WPML_Native::is_active()) : ?>
                     <tr>
+                        <th scope="row"><label for="use_wpml_fields"><?php esc_html_e('Campos según WPML', 'wpml-imagina-translate'); ?></label></th>
+                        <td>
+                            <input type="hidden" name="<?php echo esc_attr($this->option_name); ?>[use_wpml_fields_shown]" value="1">
+                            <label>
+                                <input type="checkbox" name="<?php echo esc_attr($this->option_name); ?>[use_wpml_fields]" id="use_wpml_fields" value="1" <?php checked(!empty($settings['use_wpml_fields'])); ?>>
+                                <?php esc_html_e('Traducir también los campos que WPML tiene configurados como «Traducir»', 'wpml-imagina-translate'); ?>
+                            </label>
+                            <p class="description"><?php esc_html_e('Incluye los que declaran Yoast, Rank Math, ACF y otros plugins compatibles con WPML. Los campos que WPML marca como «No traducir» tampoco se copian a la traducción.', 'wpml-imagina-translate'); ?></p>
+                        </td>
+                    </tr>
+                <?php endif; ?>
+                <tr>
                         <th scope="row">
                             <label for="meta_fields_list"><?php _e('Lista de Meta Fields', 'wpml-imagina-translate'); ?></label>
                         </th>
@@ -893,6 +911,7 @@ class WIT_Settings {
             'batch_size' => 5,
             'enable_translation_memory' => false,
             'mcp_enabled' => false,
+            'use_wpml_fields' => true,
         );
 
         $settings = get_option($this->option_name, $defaults);

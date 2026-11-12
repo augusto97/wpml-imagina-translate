@@ -137,10 +137,14 @@ $out['blocks_valid'] = count(array_filter(parse_blocks($c), function ($b) { retu
 $out['meta']         = get_post_meta($translation, '_yoast_wpseo_title', true);
 $out['custom_meta']  = get_post_meta($translation, '_custom_technical', true) === 'do-not-touch-me';
 
+// In the translation's language: the real WPML maps term ids to the current
+// language when reading them, which would show the Spanish names.
+do_action('wpml_switch_language', 'en');
 $cats = array();
 foreach (wp_get_object_terms($translation, 'category') as $term) {
     $cats[] = $term->name;
 }
+do_action('wpml_switch_language', null);
 sort($cats);
 $out['categories'] = $cats;
 

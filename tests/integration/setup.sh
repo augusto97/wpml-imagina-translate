@@ -22,6 +22,10 @@ ELEMENTOR_VERSION="${WIT_ELEMENTOR_VERSION:-4.0.8}"
 # Elementor Pro is not free, so it is never downloaded: pass your own ZIP to
 # include it. CI does not have it.
 ELEMENTOR_PRO_ZIP="${WIT_ELEMENTOR_PRO_ZIP:-}"
+# The real WPML instead of the test double: paths to the WPML and String
+# Translation ZIPs. WPML is not free and is never downloaded here.
+WPML_ZIP="${WIT_WPML_ZIP:-}"
+WPML_ST_ZIP="${WIT_WPML_ST_ZIP:-}"
 
 # The MariaDB UNIX socket path is limited to 107 characters by the kernel
 # struct, and a socket inside a deeply nested temp directory silently blows
@@ -154,15 +158,37 @@ say "Enlazando el plugin y los dobles de prueba"
 # A symlink, so edits in the working tree are live without reinstalling.
 ln -sfn "$PLUGIN_DIR" "$WWW/wp-content/plugins/wpml-imagina-translate"
 
-mkdir -p "$WWW/wp-content/plugins/sitepress-multilingual-cms" "$WWW/wp-content/mu-plugins"
-cp "$PLUGIN_DIR/tests/integration/fixtures/sitepress-stub.php" \
-   "$WWW/wp-content/plugins/sitepress-multilingual-cms/sitepress.php"
+mkdir -p "$WWW/wp-content/mu-plugins"
 cp "$PLUGIN_DIR/tests/integration/fixtures/wit-fake-ai.php" \
    "$WWW/wp-content/mu-plugins/wit-fake-ai.php"
 cp "$PLUGIN_DIR/tests/integration/fixtures/wit-mail-catcher.php" \
    "$WWW/wp-content/mu-plugins/wit-mail-catcher.php"
+cp "$PLUGIN_DIR/tests/integration/fixtures/wit-demo-strings.php" \
+   "$WWW/wp-content/mu-plugins/wit-demo-strings.php"
+# Where String Translation writes the translation files it serves strings
+# from. A real site has it; a fresh install does not, and ST then fails
+# without a word.
+mkdir -p "$WWW/wp-content/languages"
 
-"$WP" plugin activate sitepress-multilingual-cms wpml-imagina-translate
+rm -rf "$WWW/wp-content/plugins/sitepress-multilingual-cms" "$WWW/wp-content/plugins/wpml-string-translation"
+if [ -n "$WPML_ZIP" ]; then
+  [ -f "$WPML_ZIP" ] || die "WIT_WPML_ZIP no existe: $WPML_ZIP"
+  say "Instalando WPML real desde $WPML_ZIP"
+  unzip -q -o "$WPML_ZIP" -d "$WWW/wp-content/plugins/"
+  plugins="sitepress-multilingual-cms"
+  if [ -n "$WPML_ST_ZIP" ]; then
+    [ -f "$WPML_ST_ZIP" ] || die "WIT_WPML_ST_ZIP no existe: $WPML_ST_ZIP"
+    unzip -q -o "$WPML_ST_ZIP" -d "$WWW/wp-content/plugins/"
+    plugins="$plugins wpml-string-translation"
+  fi
+  "$WP" plugin activate $plugins wpml-imagina-translate
+  "$WP" eval-file "$PLUGIN_DIR/tests/integration/fixtures/wpml-setup.php"
+else
+  mkdir -p "$WWW/wp-content/plugins/sitepress-multilingual-cms"
+  cp "$PLUGIN_DIR/tests/integration/fixtures/sitepress-stub.php" \
+     "$WWW/wp-content/plugins/sitepress-multilingual-cms/sitepress.php"
+  "$WP" plugin activate sitepress-multilingual-cms wpml-imagina-translate
+fi
 
 # --- Elementor -----------------------------------------------------------------
 if [ "$ELEMENTOR_VERSION" != "none" ]; then

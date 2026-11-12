@@ -47,6 +47,9 @@ if [ "$VERSION" != "$CONST_VERSION" ]; then
   exit 1
 fi
 rm -rf "$STAGE/$SLUG/tests" "$STAGE/$SLUG/tools" "$STAGE/$SLUG/.gitignore" "$STAGE/$SLUG/.github"
+# Third-party ZIPs kept in the repository for testing (WPML, String
+# Translation) are never shipped inside this plugin.
+find "$STAGE/$SLUG" -maxdepth 1 -iname '*.zip' -delete
 
 ZIP="$OUT_DIR/$SLUG-$VERSION.zip"
 rm -f "$ZIP"
@@ -80,6 +83,11 @@ done <<< "$includes"
 
 roots=$(unzip -Z1 "$ZIP" | cut -d/ -f1 | sort -u | wc -l)
 [ "$roots" = "1" ] || { echo "El ZIP debe tener una única carpeta raíz (tiene $roots)" >&2; fail=1; }
+
+if find "$VERIFY" -iname '*.zip' -print -quit | grep -q .; then
+  echo "El ZIP contiene otros ZIP; no deberían enviarse" >&2
+  fail=1
+fi
 
 if find "$VERIFY" -path '*/tests/*' -print -quit | grep -q .; then
   echo "El ZIP incluye tests; deberían estar excluidos" >&2

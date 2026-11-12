@@ -118,7 +118,7 @@
         updateSelectedCount: function() {
             const count = $('.wit-post-checkbox:checked').length;
             $('#wit-selected-count').text(WitAdmin.format(witAdmin.strings.selected, count));
-            $('#wit-translate-selected').prop('disabled', count === 0);
+            $('#wit-translate-selected, #wit-strings-translate-selected').prop('disabled', count === 0);
         },
 
         translateSelected: function(e) {
@@ -500,6 +500,106 @@
     };
 
     // -----------------------------------------------------------------------
+    // Strings page (WPML String Translation)
+    // -----------------------------------------------------------------------
+    const WitStrings = {
+        stopped: false,
+
+        init: function() {
+            const $table = $('.wit-strings-table');
+            if (!$table.length) {
+                return;
+            }
+            this.language = $table.data('lang');
+
+            $('#wit-strings-translate-selected').on('click', function(e) {
+                e.preventDefault();
+                const ids = $('.wit-string-checkbox:checked').map(function() { return $(this).val(); }).get();
+                if (!ids.length || !confirm(WitAdmin.format(witAdmin.strings.confirm_strings, ids.length))) {
+                    return;
+                }
+                WitStrings.run(function(done) { done(ids.splice(0, 50)); }, ids.length);
+            });
+
+            $('#wit-strings-translate-all').on('click', function(e) {
+                e.preventDefault();
+                if (!confirm(witAdmin.strings.confirm_all_strings)) {
+                    return;
+                }
+                const $b = $(this);
+                const failed = [];
+                WitStrings.failed = failed;
+                // Each batch asks the server for the next pending ones, so
+                // strings translated meanwhile elsewhere are not redone.
+                WitStrings.run(function(done) {
+                    $.post(witAdmin.ajax_url, {
+                        action: 'wit_next_strings', nonce: witAdmin.nonce, language: WitStrings.language,
+                        domain: $b.data('domain'), status: $b.data('status'), search: $b.data('search'), skip: failed
+                    }).done(function(r) {
+                        done(r && r.success ? r.data.ids : []);
+                    }).fail(function() { done([]); });
+                }, null);
+            });
+        },
+
+        /**
+         * Translate batch after batch. next(done) supplies the next ids.
+         */
+        run: function(next, total) {
+            const $buttons = $('#wit-strings-translate-selected, #wit-strings-translate-all').prop('disabled', true);
+            const $stop = $('<button type="button" class="button">').text(witAdmin.strings.stop).insertAfter($buttons.last());
+            let saved = 0, errors = 0, processed = 0;
+
+            WitStrings.stopped = false;
+            $stop.on('click', function() { WitStrings.stopped = true; $stop.prop('disabled', true); });
+            $('#wit-progress').show();
+            $('#wit-progress-log').empty();
+
+            const finish = function() {
+                $stop.remove();
+                $buttons.prop('disabled', false);
+                WitAdmin.addLogEntry('=== ' + saved + ' traducidas · ' + errors + ' con error ===', errors ? 'error' : 'success');
+            };
+
+            const step = function() {
+                if (WitStrings.stopped) { finish(); return; }
+                next(function(ids) {
+                    if (!ids || !ids.length) { finish(); return; }
+                    $.post(witAdmin.ajax_url, {
+                        action: 'wit_translate_strings', nonce: witAdmin.nonce, language: WitStrings.language, ids: ids
+                    }).done(function(r) {
+                        if (!r || !r.success) {
+                            WitAdmin.addLogEntry('✗ ' + ((r && r.data && r.data.message) || 'Error'), 'error');
+                            finish();
+                            return;
+                        }
+                        saved += r.data.saved;
+                        processed += ids.length;
+                        $.each(r.data.translations, function(id, text) {
+                            const $row = $('tr[data-string-id="' + id + '"]');
+                            $row.find('.wit-string-translation').text(text);
+                            $row.find('.column-status .wit-status-label').removeClass('wit-status-pending').addClass('wit-status-success').text(witAdmin.strings.string_translated);
+                            $row.find('.wit-string-checkbox').prop('checked', false);
+                        });
+                        (r.data.errors || []).forEach(function(err) {
+                            errors++;
+                            if (WitStrings.failed) { WitStrings.failed.push(err.id); }
+                            WitAdmin.addLogEntry('✗ #' + err.id + ' — ' + err.error, 'error');
+                        });
+                        WitAdmin.updateProgress(processed, total || processed + (ids.length === 50 ? 50 : 0));
+                        step();
+                    }).fail(function(xhr) {
+                        WitAdmin.addLogEntry('✗ HTTP ' + xhr.status, 'error');
+                        finish();
+                    });
+                });
+            };
+
+            step();
+        }
+    };
+
+    // -----------------------------------------------------------------------
     // Dynamic model loader for Settings page
     // -----------------------------------------------------------------------
     const WitModels = {
@@ -612,6 +712,7 @@
     $(document).ready(function() {
         WitAdmin.init();
         WitModels.init();
+        WitStrings.init();
     });
 
 })(jQuery);

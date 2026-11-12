@@ -27,6 +27,8 @@ class WIT_Admin_Ajax {
         add_action('wp_ajax_wit_queue_status',             array($this, 'ajax_queue_status'));
         add_action('wp_ajax_wit_cancel_queue',             array($this, 'ajax_cancel_queue'));
         add_action('wp_ajax_wit_clear_memory',             array($this, 'ajax_clear_memory'));
+        add_action('wp_ajax_wit_translate_strings',        array($this, 'ajax_translate_strings'));
+        add_action('wp_ajax_wit_next_strings',             array($this, 'ajax_next_strings'));
     }
 
     /**
@@ -117,6 +119,85 @@ class WIT_Admin_Ajax {
         $removed = WIT_Translation_Memory::instance()->clear();
 
         wp_send_json_success(array('removed' => $removed));
+    }
+
+    /**
+     * Translate some String Translation strings with the configured API.
+     *
+     * At most WIT_Strings::BATCH per request, so every request stays well
+     * inside the host's time limit; the page sends the next batch.
+     */
+    public function ajax_translate_strings() {
+        $this->verify_nonce();
+
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(array('message' => __('No tienes permisos', 'wpml-imagina-translate')));
+        }
+        if (!WIT_Strings::is_available()) {
+            wp_send_json_error(array('message' => __('WPML String Translation no está activo.', 'wpml-imagina-translate')));
+        }
+
+        $language = isset($_POST['language']) ? sanitize_text_field(wp_unslash($_POST['language'])) : '';
+        if (!WIT_WPML_Integration::instance()->is_active_language($language)) {
+            wp_send_json_error(array('message' => __('El idioma destino no está activo en WPML', 'wpml-imagina-translate')));
+        }
+
+        $ids = isset($_POST['ids']) ? array_slice(array_filter(array_map('absint', (array) wp_unslash($_POST['ids']))), 0, WIT_Strings::BATCH) : array();
+        if (empty($ids)) {
+            wp_send_json_error(array('message' => __('No se seleccionó ninguna cadena', 'wpml-imagina-translate')));
+        }
+
+        @set_time_limit(300);
+
+        $result = WIT_Strings::translate($ids, $language);
+
+        $translations = array();
+        foreach ($result['results'] as $row) {
+            if ($row['status'] === 'saved') {
+                $translations[$row['id']] = $row['translation'];
+            }
+        }
+
+        wp_send_json_success(array(
+            'saved'        => $result['saved'],
+            'errors'       => $result['errors'],
+            'translations' => $translations,
+        ));
+    }
+
+    /**
+     * The next pending strings of a filter, for "translate all".
+     */
+    public function ajax_next_strings() {
+        $this->verify_nonce();
+
+        if (!current_user_can('manage_options') || !WIT_Strings::is_available()) {
+            wp_send_json_error(array('message' => __('No tienes permisos', 'wpml-imagina-translate')));
+        }
+
+        $language = isset($_POST['language']) ? sanitize_text_field(wp_unslash($_POST['language'])) : '';
+        if (!WIT_WPML_Integration::instance()->is_active_language($language)) {
+            wp_send_json_error(array('message' => __('El idioma destino no está activo en WPML', 'wpml-imagina-translate')));
+        }
+
+        $status = isset($_POST['status']) && $_POST['status'] === 'needs_update' ? 'needs_update' : 'pending';
+        $skip   = isset($_POST['skip']) ? array_filter(array_map('absint', (array) wp_unslash($_POST['skip']))) : array();
+
+        // Strings that already failed in this run are skipped by the page, so
+        // ask for enough to fill a batch past them.
+        $list = WIT_Strings::listing($language, array(
+            'domain'   => isset($_POST['domain']) ? sanitize_text_field(wp_unslash($_POST['domain'])) : '',
+            'status'   => $status,
+            'search'   => isset($_POST['search']) ? sanitize_text_field(wp_unslash($_POST['search'])) : '',
+            'per_page' => WIT_Strings::BATCH + count($skip),
+        ));
+
+        $ids = array_values(array_diff(array_column($list['items'], 'id'), $skip));
+
+        wp_send_json_success(array(
+            'ids'       => array_slice($ids, 0, WIT_Strings::BATCH),
+            'remaining' => max(0, $list['total'] - count($skip)),
+        ));
     }
 
     /**

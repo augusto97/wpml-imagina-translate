@@ -143,6 +143,11 @@ class WIT_Fake_AI {
     }
 
     private function translate($text, $lang) {
+        // A model that loses a placeholder, as real ones sometimes do.
+        $drop = get_option('wit_fake_drop_placeholder', '');
+        if ($drop !== '' && strpos($text, $drop) !== false) {
+            return '[' . $lang . '] ' . trim(str_replace($drop, '', $text));
+        }
         if ($this->mode() === 'hostile') {
             return '<img src=x onerror=alert(1)><script>alert(2)</script>[' . $lang . '] ' . $text;
         }

@@ -4,8 +4,8 @@
  * repeatable without rebuilding WordPress.
  *
  * Deletes every translation the plugin produced and re-registers the Spanish
- * sources with WPML. Dropping icl_translations is the only reliable way to
- * clear the stub's link table, and the stub recreates it on construction.
+ * sources with WPML — the test double, or the real WPML when setup.sh
+ * installed it.
  *
  * Run with: wp eval-file reset.php
  */
@@ -54,13 +54,37 @@ $wpdb->query($wpdb->prepare(
     $max_term
 ));
 
-$wpdb->query("DROP TABLE IF EXISTS {$wpdb->prefix}icl_translations");
 $wpdb->query("TRUNCATE {$wpdb->prefix}wit_translation_memory");
 $wpdb->query("TRUNCATE {$wpdb->prefix}wit_queue");
 $wpdb->query("TRUNCATE {$wpdb->prefix}wit_translation_logs");
 
-// This process still holds the dropped table; the stub recreates it here.
-new WIT_WPML_Stub();
+$real_wpml = class_exists('SitePress');
+
+if ($real_wpml) {
+    // The real WPML: its tables are its own and stay. Remove what belonged to
+    // the translations deleted above — link rows, Translation Management
+    // status and jobs — and the strings the suite registered.
+    $p = $wpdb->prefix;
+    $wpdb->query("DELETE t FROM {$p}icl_translations t LEFT JOIN {$wpdb->posts} x ON x.ID = t.element_id WHERE t.element_type LIKE 'post\\_%' AND x.ID IS NULL");
+    $wpdb->query("DELETE t FROM {$p}icl_translations t LEFT JOIN {$wpdb->term_taxonomy} x ON x.term_taxonomy_id = t.element_id WHERE t.element_type LIKE 'tax\\_%' AND x.term_taxonomy_id IS NULL");
+    $wpdb->query("DELETE s FROM {$p}icl_translation_status s LEFT JOIN {$p}icl_translations t ON t.translation_id = s.translation_id WHERE t.translation_id IS NULL");
+    $wpdb->query("DELETE j FROM {$p}icl_translate_job j LEFT JOIN {$p}icl_translation_status s ON s.rid = j.rid WHERE s.rid IS NULL");
+    $wpdb->query("DELETE f FROM {$p}icl_translate f LEFT JOIN {$p}icl_translate_job j ON j.job_id = f.job_id WHERE j.job_id IS NULL");
+    if ($wpdb->get_var("SHOW TABLES LIKE '{$p}icl_strings'")) {
+        $wpdb->query("DELETE FROM {$p}icl_string_translations");
+        $wpdb->query("DELETE FROM {$p}icl_strings WHERE context LIKE 'wit-%'");
+        $wpdb->query("UPDATE {$p}icl_strings SET status = 0");
+    }
+    if (function_exists('icl_cache_clear')) {
+        icl_cache_clear();
+    }
+    wp_cache_flush();
+} else {
+    // The stub: dropping icl_translations is the only reliable way to clear
+    // its link table; this process still holds it, and the stub recreates it.
+    $wpdb->query("DROP TABLE IF EXISTS {$wpdb->prefix}icl_translations");
+    new WIT_WPML_Stub();
+}
 
 clean_term_cache($keep_terms);
 clean_post_cache((int) $fixture['post']);

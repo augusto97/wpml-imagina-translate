@@ -335,3 +335,34 @@
     background: #d63638;
     color: #fff;
 }
+
+/* Strings page */
+.wit-strings-filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    align-items: center;
+    margin: 14px 0 6px;
+}
+
+.wit-strings-filter select {
+    max-width: 280px;
+}
+
+.wit-strings-table .wit-string-text {
+    display: inline;
+    padding: 0;
+    background: none;
+    font-size: 13px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.wit-strings-table .column-domain {
+    width: 16%;
+    word-break: break-word;
+}
+
+.wit-strings-table .column-status {
+    width: 12%;
+}

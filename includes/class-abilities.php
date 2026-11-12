@@ -70,6 +70,21 @@ class WIT_Abilities {
      * @return array<string,array>
      */
     public static function definitions() {
+        $all = self::all_definitions();
+
+        // Only what this site can do: no strings tools without String
+        // Translation, no WPML settings tool without the real WPML.
+        if (!WIT_Strings::is_available()) {
+            unset($all['wit/strings-overview'], $all['wit/list-strings'], $all['wit/prepare-strings'], $all['wit/save-strings']);
+        }
+        if (!WIT_WPML_Native::is_active()) {
+            unset($all['wit/set-wpml-translation-mode']);
+        }
+
+        return $all;
+    }
+
+    private static function all_definitions() {
         $language = array(
             'type'        => 'string',
             'description' => 'Target language code, as returned by translation_overview (e.g. "en", "fr", "pt-br").',
@@ -285,6 +300,88 @@ class WIT_Abilities {
                 'execute'     => array(__CLASS__, 'update_settings'),
                 'permission'  => 'manage_options',
                 'annotations' => array('readonly' => false, 'destructive' => false, 'idempotent' => true),
+            ),
+
+            'wit/strings-overview' => array(
+                'label'       => __('Resumen de cadenas', 'wpml-imagina-translate'),
+                'description' => 'WPML String Translation: for each language, how many interface strings (theme and plugin texts, widgets, admin texts, site title) are translated, pending or need an update, and the text domains with the most pending. Page-builder content is not here: it is translated with its post. Use it when the user asks about buttons, menus, footers or texts that still show in the original language.',
+                'input'       => array('type' => 'object', 'properties' => array()),
+                'execute'     => array(__CLASS__, 'strings_overview'),
+                'permission'  => 'manage_options',
+                'annotations' => array('readonly' => true, 'destructive' => false, 'idempotent' => true),
+            ),
+
+            'wit/list-strings' => array(
+                'label'       => __('Listar cadenas', 'wpml-imagina-translate'),
+                'description' => 'List String Translation strings for one target language. Filter by domain (text domain or context, from strings_overview), status ("pending" — missing or needing an update —, "needs_update", "translated", "all") and text. Paginated.',
+                'input'       => array(
+                    'type'       => 'object',
+                    'required'   => array('language'),
+                    'properties' => array(
+                        'language' => $language,
+                        'domain'   => array('type' => 'string', 'maxLength' => 160),
+                        'status'   => array('type' => 'string', 'enum' => array('pending', 'needs_update', 'translated', 'all'), 'default' => 'pending'),
+                        'search'   => array('type' => 'string', 'maxLength' => 200),
+                        'page'     => array('type' => 'integer', 'minimum' => 1, 'default' => 1),
+                        'per_page' => array('type' => 'integer', 'minimum' => 1, 'maximum' => 100, 'default' => 50),
+                    ),
+                ),
+                'execute'     => array(__CLASS__, 'list_strings'),
+                'permission'  => 'manage_options',
+                'annotations' => array('readonly' => true, 'destructive' => false, 'idempotent' => true),
+            ),
+
+            'wit/prepare-strings' => array(
+                'label'       => __('Preparar cadenas', 'wpml-imagina-translate'),
+                'description' => 'Get interface strings to translate into one language: either the given string_ids, or the next pending ones of a domain (up to 100). Returns text units with ids — strings with markup arrive as their text pieces — and the placeholders each string must keep. YOU translate the units, then call save_strings. Uses the user\'s Claude subscription, never the site\'s API; say how many strings there are before working through many.',
+                'input'       => array(
+                    'type'       => 'object',
+                    'required'   => array('language'),
+                    'properties' => array(
+                        'language'   => $language,
+                        'string_ids' => array('type' => 'array', 'items' => array('type' => 'integer', 'minimum' => 1), 'maxItems' => WIT_Strings::MCP_MAX),
+                        'domain'     => array('type' => 'string', 'maxLength' => 160),
+                        'limit'      => array('type' => 'integer', 'minimum' => 1, 'maximum' => WIT_Strings::MCP_MAX, 'default' => 50),
+                    ),
+                ),
+                'execute'     => array(__CLASS__, 'prepare_strings'),
+                'permission'  => 'manage_options',
+                'annotations' => array('readonly' => true, 'destructive' => false, 'idempotent' => true),
+            ),
+
+            'wit/save-strings' => array(
+                'label'       => __('Guardar cadenas', 'wpml-imagina-translate'),
+                'description' => 'Save translations of interface strings to WPML String Translation: "string_ids" from prepare_strings, "translations" mapping each unit id to its translation. A string whose placeholders (%s, {name}...) differ from the original is rejected and reported; the rest are saved and appear on the site.',
+                'input'       => array(
+                    'type'       => 'object',
+                    'required'   => array('language', 'string_ids', 'translations'),
+                    'properties' => array(
+                        'language'     => $language,
+                        'string_ids'   => array('type' => 'array', 'items' => array('type' => 'integer', 'minimum' => 1), 'minItems' => 1, 'maxItems' => WIT_Strings::MCP_MAX),
+                        'translations' => array('type' => 'object', 'additionalProperties' => array('type' => 'string')),
+                    ),
+                ),
+                'execute'     => array(__CLASS__, 'save_strings'),
+                'permission'  => 'manage_options',
+                // Replaces existing translations of those strings.
+                'annotations' => array('readonly' => false, 'destructive' => true, 'idempotent' => true),
+            ),
+
+            'wit/set-wpml-translation-mode' => array(
+                'label'       => __('Cambiar qué traduce WPML', 'wpml-imagina-translate'),
+                'description' => 'Change a WPML setting. For a post type: "translate", "display_as_translated" (show the original where there is no translation) or "do_not_translate". For a custom field: "translate", "copy", "copy_once" or "ignore". These change how the whole site is translated: "do_not_translate" hides existing translations of that type. Explain the effect and get the user\'s explicit go-ahead first; site_settings shows the current modes.',
+                'input'       => array(
+                    'type'       => 'object',
+                    'required'   => array('mode'),
+                    'properties' => array(
+                        'post_type'    => array('type' => 'string', 'maxLength' => 60),
+                        'custom_field' => array('type' => 'string', 'maxLength' => 160),
+                        'mode'         => array('type' => 'string', 'enum' => array('translate', 'display_as_translated', 'do_not_translate', 'copy', 'copy_once', 'ignore')),
+                    ),
+                ),
+                'execute'     => array(__CLASS__, 'set_wpml_mode'),
+                'permission'  => 'manage_options',
+                'annotations' => array('readonly' => false, 'destructive' => true, 'idempotent' => true),
             ),
 
             'wit/get-glossary' => array(
@@ -821,6 +918,7 @@ class WIT_Abilities {
                 'post_type'    => $type->name,
                 'label'        => $type->labels->singular_name,
                 'translatable' => $translatable === null ? 'unknown' : (bool) $translatable,
+                'mode'         => WIT_WPML_Native::post_type_mode($type->name),
             );
             if ($translatable === false && in_array($type->name, array('post', 'page', 'product'), true)) {
                 $problems[] = sprintf('WPML is set not to translate "%s". Those items cannot be translated until it is changed in WPML → Settings → Post Types Translation.', $type->labels->name);
@@ -839,8 +937,23 @@ class WIT_Abilities {
             $problems[] = 'No API key is configured, so the dashboard and the background queue cannot translate. Translating through this chat still works.';
         }
 
+        $problems = array_merge($problems, WIT_WPML_Native::problems());
+
+        $fields = array();
+        if (WIT_WPML_Native::is_active()) {
+            $names = array(0 => 'ignore', 1 => 'copy', 2 => 'translate', 3 => 'copy_once');
+            foreach (array_filter(array_map('trim', explode(',', (string) $settings['meta_fields_list']))) as $key) {
+                $mode = WIT_WPML_Native::field_mode($key);
+                $fields[$key] = $mode === null ? 'not set' : $names[$mode];
+            }
+        }
+
         return array(
             'wpml'     => array(
+                'real_wpml'        => WIT_WPML_Native::is_active(),
+                'translation_management' => WIT_WPML_Native::has_tm(),
+                'string_translation' => WIT_Strings::is_available() ? (defined('WPML_ST_VERSION') ? WPML_ST_VERSION : true) : false,
+                'plugin_fields_in_wpml' => $fields,
                 'version'          => defined('ICL_SITEPRESS_VERSION') ? ICL_SITEPRESS_VERSION : 'unknown',
                 'default_language' => $default,
                 'languages'        => $languages,
@@ -861,7 +974,7 @@ class WIT_Abilities {
                 'new_translations_are'  => apply_filters('wit_new_translation_status', 'draft', null, ''),
             ),
             'problems' => $problems,
-            'note'     => 'API keys, provider, model and prompt are changed only in the plugin settings page; WPML\'s own settings only in WPML.',
+            'note'     => 'API keys, provider, model and prompt are changed only in the plugin settings page. WPML\'s translation mode of a post type or custom field can be changed with set_wpml_translation_mode; everything else of WPML only in WPML.',
         );
     }
 
@@ -908,6 +1021,104 @@ class WIT_Abilities {
         $result['changed'] = $changed;
 
         return $result;
+    }
+
+    public static function strings_overview($input = array()) {
+        if (!WIT_Strings::is_available()) {
+            return new WP_Error('wit_no_st', 'WPML String Translation is not active on this site.');
+        }
+
+        $overview = WIT_Strings::overview();
+        if (!$overview['files_writable']) {
+            $overview['problem'] = 'wp-content/languages/wpml does not exist or is not writable: String Translation cannot write its translation files, so translated theme and plugin strings will not show on the site. Tell the user; the hosting needs to fix the folder permissions.';
+        }
+
+        $pending = array_sum(array_column($overview['languages'], 'pending'));
+        if ($pending > WIT_Strings::MCP_MAX) {
+            $overview['note'] = sprintf('%d strings are pending in total. Translating them here uses the user\'s Claude subscription; tell the user and let them choose which languages or domains, %d strings per call at most.', $pending, WIT_Strings::MCP_MAX);
+        }
+
+        return $overview;
+    }
+
+    public static function list_strings($input) {
+        if (!WIT_Strings::is_available()) {
+            return new WP_Error('wit_no_st', 'WPML String Translation is not active on this site.');
+        }
+
+        $language = (string) $input['language'];
+        if (!WIT_WPML_Integration::instance()->is_active_language($language)) {
+            return new WP_Error('wit_bad_language', sprintf('"%s" is not an active WPML language.', $language));
+        }
+
+        return WIT_Strings::listing($language, array(
+            'domain'   => isset($input['domain']) ? (string) $input['domain'] : '',
+            'status'   => isset($input['status']) ? (string) $input['status'] : 'pending',
+            'search'   => isset($input['search']) ? (string) $input['search'] : '',
+            'page'     => isset($input['page']) ? (int) $input['page'] : 1,
+            'per_page' => min(100, isset($input['per_page']) ? (int) $input['per_page'] : 50),
+        ));
+    }
+
+    public static function prepare_strings($input) {
+        return WIT_Strings::prepare((string) $input['language'], array(
+            'ids'    => isset($input['string_ids']) ? (array) $input['string_ids'] : array(),
+            'domain' => isset($input['domain']) ? (string) $input['domain'] : '',
+            'limit'  => isset($input['limit']) ? (int) $input['limit'] : 50,
+        ));
+    }
+
+    public static function save_strings($input) {
+        return WIT_Strings::save_from_chat((string) $input['language'], (array) $input['string_ids'], (array) $input['translations']);
+    }
+
+    public static function set_wpml_mode($input) {
+        if (!WIT_WPML_Native::is_active()) {
+            return new WP_Error('wit_no_wpml', 'WPML is not active.');
+        }
+
+        $mode = (string) $input['mode'];
+
+        if (!empty($input['post_type'])) {
+            $type = sanitize_key((string) $input['post_type']);
+            if (!in_array($mode, array('translate', 'display_as_translated', 'do_not_translate'), true)) {
+                return new WP_Error('wit_bad_mode', 'For a post type the mode is translate, display_as_translated or do_not_translate.');
+            }
+            if (!post_type_exists($type)) {
+                return new WP_Error('wit_bad_type', sprintf('There is no post type "%s".', $type));
+            }
+            $before = WIT_WPML_Native::post_type_mode($type);
+            if (!WIT_WPML_Native::set_post_type_mode($type, $mode)) {
+                return new WP_Error('wit_failed', 'WPML did not accept the change.');
+            }
+            (new WIT_Translation_Manager())->log_event(0, '', sprintf(
+                /* translators: 1: post type, 2: old mode, 3: new mode */
+                __('WPML desde Claude: tipo «%1$s» de %2$s a %3$s', 'wpml-imagina-translate'),
+                $type, $before, $mode
+            ));
+            return array('post_type' => $type, 'before' => $before, 'now' => WIT_WPML_Native::post_type_mode($type));
+        }
+
+        if (!empty($input['custom_field'])) {
+            $modes = array('ignore' => 0, 'copy' => 1, 'translate' => 2, 'copy_once' => 3);
+            if (!isset($modes[$mode])) {
+                return new WP_Error('wit_bad_mode', 'For a custom field the mode is translate, copy, copy_once or ignore.');
+            }
+            $field  = (string) $input['custom_field'];
+            $before = WIT_WPML_Native::field_mode($field);
+            if (!WIT_WPML_Native::set_field_mode($field, $modes[$mode])) {
+                return new WP_Error('wit_failed', 'WPML did not accept the change.');
+            }
+            $names = array_flip($modes);
+            (new WIT_Translation_Manager())->log_event(0, '', sprintf(
+                /* translators: 1: field, 2: old mode, 3: new mode */
+                __('WPML desde Claude: campo «%1$s» de %2$s a %3$s', 'wpml-imagina-translate'),
+                $field, $before === null ? 'sin configurar' : $names[$before], $mode
+            ));
+            return array('custom_field' => $field, 'before' => $before === null ? 'not set' : $names[$before], 'now' => $mode);
+        }
+
+        return new WP_Error('wit_nothing', 'Give a post_type or a custom_field.');
     }
 
     public static function get_glossary($input = array()) {

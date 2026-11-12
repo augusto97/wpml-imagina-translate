@@ -20,6 +20,8 @@ function esc_html__($text, $domain = '')    { return $text; }
 function apply_filters($tag, $value)        { return $value; }
 function wp_json_encode($data, $flags = 0)  { return json_encode($data, $flags); }
 function did_action($hook)                  { return 0; } // Elementor never "loaded" here
+// One registered shortcode, to tell [gallery] from words in brackets.
+function shortcode_exists($tag)             { return $tag === 'gallery'; }
 function wp_strip_all_tags($text)           { return trim(strip_tags(preg_replace('@<(script|style)[^>]*?>.*?</\\1>@si', '', (string) $text))); }
 // Enough of kses for the tests: removes scripts and event handlers, keeps formatting.
 function wp_kses_post($text) {
@@ -89,6 +91,7 @@ require_once dirname(__DIR__) . '/includes/class-field-rules.php';
 require_once dirname(__DIR__) . '/includes/class-glossary.php';
 require_once dirname(__DIR__) . '/includes/class-translator-engine.php';
 require_once dirname(__DIR__) . '/includes/class-elementor-handler.php';
+require_once dirname(__DIR__) . '/includes/class-strings.php';
 
 // --- Tiny assertion framework -------------------------------------------
 

@@ -16,6 +16,7 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 - **Glosario**: términos de marca que nunca se traducen y traducciones fijas por idioma
 - **Cola en segundo plano**: encolas cientos de páginas y cierras el navegador; el servidor sigue
 - **Traducir desde Claude (MCP)**: conecta tu suscripción de Claude y pide desde el chat qué falta, traduce, revisa, corrige y publica — sin gastar la API key
+- **Cadenas de WPML String Translation**: traduce con IA los textos del tema y de los plugins, widgets y textos de administración — lo que sigue en el idioma original cuando todas las páginas ya están traducidas
 - **Smart Content Parser**: Preserva bloques de Gutenberg, HTML, y estructura
 - **Meta Fields**: Traduce automáticamente SEO (Yoast, RankMath), excerpts, y campos personalizados
 - **Dashboard Intuitivo**: Interfaz simple para gestionar traducciones
@@ -27,6 +28,9 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 - Crea posts traducidos vinculados correctamente en WPML
 - Copia taxonomías, featured images, y metadatos
 - Actualiza traducciones existentes
+- **WPML sabe de cada traducción**: aparece como completa en su panel y la marca «necesita actualización» cuando cambia el original
+- **Campos según WPML**: traduce los campos que WPML tiene como «Traducir» (incluidos los que declaran Yoast, Rank Math, ACF…) y no copia los marcados «No traducir»
+- Respeta las taxonomías que WPML no traduce (formatos de entrada, tipos de producto…)
 
 ### Integridad del contenido
 - El HTML se modifica por posiciones de token, nunca re-serializando: todo byte
@@ -57,7 +61,8 @@ WPML cobra caro por traducciones automáticas con IA. Este plugin te permite usa
 ### Requisitos
 - WordPress 6.0 o superior (probado hasta 7.1)
 - PHP 7.4 o superior (probado hasta 8.4)
-- WPML Multilingual CMS 4.7 o superior. Usa solo los hooks públicos de WPML; las pruebas automáticas corren contra un doble que reproduce esos hooks y la tabla de traducciones de WPML con sus restricciones, **no contra WPML real**
+- WPML Multilingual CMS 4.7 o superior; **probado contra WPML 5.2.0 y WPML String Translation 5.2.0 reales** (además de contra un doble de sus hooks, para las pruebas que no pueden usar WPML)
+- WPML String Translation (opcional): activa la pantalla «Cadenas»
 - Elementor 3.x o 4.x (opcional; probado con 4.0.8 y con Elementor Pro 4.2.3)
 - API key de OpenAI, Claude, o Gemini
 
@@ -176,6 +181,27 @@ Número de posts a procesar en cada lote. Recomendado: 5-10
 5. Click en "Traducir Seleccionados"
 6. Observa el progreso en tiempo real
 
+### Traducir las cadenas (WPML String Translation)
+
+Con String Translation activo aparece **IA Translate → Cadenas**: los textos del
+tema y de los plugins, widgets, textos de administración y el título del sitio.
+
+1. Elige el idioma al que traducir y, si quieres, un dominio (el tema, un plugin…).
+2. Marca las cadenas y pulsa **Traducir seleccionadas**, o **Traducir las N de este filtro** para todas las pendientes, de 50 en 50, con barra de progreso y botón para detener.
+
+Detalles que importan:
+
+- **Cada cadena se traduce desde su propio idioma.** Los temas y plugins están en inglés, así que en un sitio en español también hay que traducirlos *al español*.
+- **Lo que ya traduce el fichero de idioma del tema o plugin no se vuelve a pagar**: no aparece como pendiente.
+- **Los marcadores se conservan o la traducción se descarta.** `%s`, `%1$s`, `{name}` y los shortcodes deben quedar igual: un `%s` de menos en una cadena de un tema provoca un error fatal en PHP 8 en la página que la imprime. Las descartadas aparecen en el progreso.
+- **Las cadenas con HTML se traducen nodo a nodo**: enlaces y atributos no cambian.
+- El contenido de Elementor y Gutenberg no aparece aquí: se traduce con su página.
+
+> **Si las cadenas traducidas no aparecen en la web**: String Translation guarda
+> sus traducciones en `wp-content/languages/wpml`, y si esa carpeta no existe o no
+> se puede escribir **WPML falla sin avisar**. El plugin sí avisa, en la pantalla
+> Cadenas y a Claude.
+
 ### Ver Logs de Traducción
 
 1. Ve a **IA Translate → Logs**
@@ -203,6 +229,8 @@ dashboard del plugin nunca pasa por Claude. No hay gasto duplicado.
 > «Quita la traducción francesa de la página de Ofertas» (la despublica o la manda a la papelera; nunca la borra del todo).
 > «¿Cómo está configurado WPML? ¿Por qué no se traducen los productos?»
 > «Activa la memoria de traducción» · «Traduce también el campo `rank_math_title`».
+> «¿Qué textos del tema siguen en inglés? Tradúcelos al español.» (con String Translation)
+> «Haz que WPML muestre las entradas sin traducir en el idioma original» · «Que WPML traduzca el campo `subtitulo`» (con WPML real, solo administradores)
 
 Claude ve el estado de cada contenido en cada idioma:
 
@@ -238,9 +266,12 @@ en los ajustes, cada una con su botón **Revocar**.
 
 **Claude nunca ve ni cambia las API keys**, el proveedor, el modelo ni el
 prompt. Un administrador puede pedirle que active la memoria de traducción, que
-añada o quite campos a traducir o que cambie el tamaño de lote; nada más. Los
-ajustes de WPML los puede **consultar** (idiomas, formato de URL, qué tipos de
-contenido traduce WPML) pero no cambiar.
+añada o quite campos a traducir o que cambie el tamaño de lote. De WPML puede
+**consultar** idiomas, formato de URL y qué traduce, y **cambiar** solo dos cosas,
+y solo si se lo pides: el modo de traducción de un tipo de contenido (traducir,
+mostrar el original si no hay traducción, no traducir) y el de un campo
+personalizado (traducir, copiar, copiar una vez, ignorar). Antes de hacerlo te
+explica el efecto y te pide confirmación.
 
 Todo lo que Claude hace en el sitio —publicar, despublicar, corregir, cambiar
 ajustes— queda en **IA Translate → Logs** como «Claude (MCP)».

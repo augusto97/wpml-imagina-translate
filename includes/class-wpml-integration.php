@@ -511,6 +511,11 @@ class WIT_WPML_Integration {
              * @param int    $source_post_id
              * @param int    $target_post_id
              */
+            // WPML is configured not to carry this field to translations.
+            if (WIT_WPML_Native::field_mode($key) === WIT_WPML_Native::MODE_IGNORE) {
+                continue;
+            }
+
             if (!apply_filters('wit_copy_meta_key', true, $key, $source_post_id, $target_post_id)) {
                 continue;
             }
@@ -683,6 +688,10 @@ class WIT_WPML_Integration {
         $seen    = array();
 
         foreach (get_object_taxonomies(get_post_type($source_post_id)) as $taxonomy) {
+            if (!WIT_WPML_Native::is_translated_taxonomy($taxonomy)) {
+                continue;
+            }
+
             $terms = wp_get_object_terms($source_post_id, $taxonomy, array('fields' => 'ids'));
 
             if (is_wp_error($terms) || empty($terms)) {
@@ -731,6 +740,14 @@ class WIT_WPML_Integration {
             $terms = wp_get_object_terms($source_post_id, $taxonomy, array('fields' => 'ids'));
 
             if (is_wp_error($terms) || empty($terms)) {
+                continue;
+            }
+
+            // A taxonomy WPML does not translate (post formats, WooCommerce's
+            // product types...) shares its terms across languages: assign the
+            // same ones, never create "translations" WPML would not know.
+            if (!WIT_WPML_Native::is_translated_taxonomy($taxonomy)) {
+                wp_set_object_terms($translated_post_id, array_map('intval', $terms), $taxonomy);
                 continue;
             }
 

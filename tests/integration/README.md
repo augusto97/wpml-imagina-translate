@@ -51,6 +51,8 @@ En Debian/Ubuntu: `apt-get install -y mariadb-server php-cli php-mysql curl unzi
 | `WIT_PHP` | `php` | Binario de PHP del servidor web de pruebas, para probar otra versión |
 | `WIT_ELEMENTOR_VERSION` | `4.0.8` | Versión de Elementor que se instala; `none` para omitirlo |
 | `WIT_ELEMENTOR_PRO_ZIP` | — | Ruta a tu ZIP de Elementor Pro. Nunca se descarga; sin él, la sección J se omite |
+| `WIT_WPML_ZIP` | — | Ruta al ZIP de WPML. Con él se instala **WPML real** en lugar del doble y se completa su asistente desde código (español por defecto, inglés y francés) |
+| `WIT_WPML_ST_ZIP` | — | Ruta al ZIP de WPML String Translation (junto con `WIT_WPML_ZIP`) |
 
 ## Qué hay dentro
 
@@ -204,6 +206,23 @@ El proveedor falso tiene un modo `hostile` que antepone
 `<img src=x onerror=…><script>…</script>` a cada traducción, como haría un
 modelo comprometido o manipulado por el texto que traduce.
 
+### WPML real
+
+Con `WIT_WPML_ZIP` y `WIT_WPML_ST_ZIP`, `setup.sh` instala WPML y String
+Translation en lugar del doble y `fixtures/wpml-setup.php` completa su asistente
+desde código. **Toda la suite corre igual contra WPML real**; además se activa la
+sección L. En CI hay un tercer trabajo de integración que usa los ZIP de la rama
+`main`; si no están, se omite con un aviso.
+
+Tres diferencias con el doble que las pruebas tienen en cuenta:
+
+- WPML decide si una traducción «necesita actualización» **al final de la
+  petición**, así que la sección L va en pasos, cada uno en su propio proceso.
+- WPML traduce también las imágenes: la destacada de una traducción es la
+  imagen traducida, no la original.
+- Al leer los términos de un post, WPML los devuelve en el idioma *actual*; para
+  ver los de la traducción hay que cambiar antes de idioma.
+
 ### `fixtures/reset.php`
 
 Devuelve la instalación a su estado inicial sin reconstruir WordPress. Lee los
@@ -222,6 +241,7 @@ concretos, porque la divergencia de arriba garantiza que no son los obvios.
 | **F** | MCP con un chat simulado: cadenas pedidas, guardado todo-o-nada, fidelidad, estados al día/desactualizado, correcciones, publicación, glosario, permisos por rol, y **cero llamadas a la API** |
 | **G** | MCP por HTTP con el cliente oficial: OAuth completo, herramientas, una traducción entera, y los ataques |
 | **I** | Elementor real, por API y por MCP: widgets clásicos y atómicos, ajustes técnicos intactos, render de Elementor, corrección de una frase dentro de un widget, desactualizado al editar desde Elementor |
+| **L** | Con WPML real: WPML registra nuestras traducciones y las marca «necesita actualización»; campos y taxonomías según la configuración de WPML; ajustes de WPML por MCP; cadenas de String Translation por API y por MCP —marcadores, HTML, el `%s` suelto— y, en una petición real a la web, la cadena del tema traducida |
 | **K** | Cada fallo de la auditoría 1.4.0 reproducido como comprobación: el original no se sobrescribe, un modelo hostil no guarda scripts, tokens en el historial, traducciones en la papelera, ediciones a mano protegidas, quitar traducciones y ajustes por MCP, permisos de Autor, la cola sin elementos atascados ni filas reclamadas dos veces, OAuth sin canjes dobles, y el panel paginado |
 | **J** | Elementor Pro (si se instala): siete widgets por API y por MCP, y el formulario traducido **enviado de verdad** — email, redirección y validación |
 | **H** | El formulario de ajustes por `options.php`, incluido que enviar una key vacía **no** borre la guardada |

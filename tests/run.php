@@ -15,6 +15,7 @@ $suites = array(
     'test-field-rules.php',
     'test-glossary.php',
     'test-batch-protocol.php',
+    'test-strings.php',
 );
 
 echo "\n\033[1mWPML Imagina Translate — suite de tests\033[0m\n";

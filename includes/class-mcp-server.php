@@ -158,6 +158,8 @@ class WIT_MCP_Server {
             . '("totals" in prepare_translation), explain that translating them here consumes their Claude usage, and let them decide whether '
             . 'and how to proceed — batch by batch, never more than ' . WIT_Translation_Plan::MAX_POSTS . ' posts per call. '
             . "\n\n"
+            . 'Interface texts (theme and plugin strings, widgets, footers, buttons) live in WPML String Translation: strings_overview, then prepare_strings and save_strings. '
+            . "\n\n"
             . 'Translations are saved as drafts. Publish, unpublish or trash only when the user explicitly asks, and say which translation first. '
             . 'A translation someone edited by hand is not replaced unless the user agrees (save_translation answers "needs_confirmation"). '
             . 'Take post IDs from list_posts or post_translation_status; never guess them. '

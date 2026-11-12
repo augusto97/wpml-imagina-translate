@@ -52,6 +52,17 @@ class WIT_Translation_Dashboard {
             array($this, 'render_dashboard')
         );
 
+        if (WIT_Strings::is_available()) {
+            add_submenu_page(
+                'wpml-ia-translate',
+                __('Cadenas de WPML', 'wpml-imagina-translate'),
+                __('Cadenas', 'wpml-imagina-translate'),
+                'manage_options',
+                'wpml-ia-translate-strings',
+                array($this, 'render_strings')
+            );
+        }
+
         add_submenu_page(
             'wpml-ia-translate',
             __('Translation Logs', 'wpml-imagina-translate'),
@@ -102,6 +113,11 @@ class WIT_Translation_Dashboard {
                 'retranslate' => __('Re-Traducir', 'wpml-imagina-translate'),
                 'edit_translation' => __('Editar traducción', 'wpml-imagina-translate'),
                 'translated' => __('Al día', 'wpml-imagina-translate'),
+                /* translators: %d: number of strings */
+                'confirm_strings' => __('Se traducirán %d cadenas con la API configurada. ¿Continuar?', 'wpml-imagina-translate'),
+                'confirm_all_strings' => __('Se traducirán todas las cadenas pendientes de este filtro con la API configurada, de 50 en 50. Puedes detenerlo en cualquier momento. ¿Continuar?', 'wpml-imagina-translate'),
+                'stop' => __('Detener', 'wpml-imagina-translate'),
+                'string_translated' => __('Traducida', 'wpml-imagina-translate'),
             ),
         ));
     }
@@ -167,6 +183,51 @@ class WIT_Translation_Dashboard {
         $stats               = $translation_manager->get_statistics();
 
         include WIT_PLUGIN_DIR . 'admin/views/dashboard.php';
+    }
+
+    /**
+     * The String Translation page.
+     */
+    public function render_strings() {
+        if (!current_user_can('manage_options')) {
+            wp_die(esc_html__('No tienes permisos para acceder a esta página.', 'wpml-imagina-translate'));
+        }
+
+        $wpml      = WIT_WPML_Integration::instance();
+        $languages = $wpml->get_active_languages();
+
+        $language = isset($_GET['wit_lang']) ? sanitize_text_field(wp_unslash($_GET['wit_lang'])) : '';
+        if (!$wpml->is_active_language($language)) {
+            // Interface strings are usually English, so the site's own
+            // language is the first one that needs them.
+            $language = $wpml->get_default_language();
+        }
+
+        $statuses = array(
+            'pending'      => __('Pendientes', 'wpml-imagina-translate'),
+            'needs_update' => __('Necesitan actualización', 'wpml-imagina-translate'),
+            'translated'   => __('Traducidas', 'wpml-imagina-translate'),
+            'all'          => __('Todas', 'wpml-imagina-translate'),
+        );
+        $status = isset($_GET['wit_status']) ? sanitize_key(wp_unslash($_GET['wit_status'])) : 'pending';
+        if (!isset($statuses[$status])) {
+            $status = 'pending';
+        }
+
+        $domain  = isset($_GET['wit_domain']) ? sanitize_text_field(wp_unslash($_GET['wit_domain'])) : '';
+        $search  = isset($_GET['wit_s']) ? sanitize_text_field(wp_unslash($_GET['wit_s'])) : '';
+        $paged   = isset($_GET['paged']) ? max(1, absint($_GET['paged'])) : 1;
+        $domains = WIT_Strings::domains($language);
+        $listing = WIT_Strings::listing($language, array(
+            'domain'   => $domain,
+            'status'   => $status,
+            'search'   => $search,
+            'page'     => $paged,
+            'per_page' => 50,
+        ));
+        $problems = WIT_WPML_Native::problems();
+
+        include WIT_PLUGIN_DIR . 'admin/views/strings.php';
     }
 
     /**

@@ -49,7 +49,9 @@ section() { SECTION="$1"; printf '\n\033[1m%s\033[0m\n' "$1"; }
 # warnings are the environment's, not the plugin's.
 # Elementor's own logger adds notices about its remote services and its bundled
 # Twig; they name Elementor's files, never this plugin's.
-NOISE='wp_version_check|wp_update_themes|wp_update_plugins|plugins_api|wordpress\.org|plugins/elementor/|plugins/elementor-pro/|\[Elementor Atomic Widgets\]'
+# WPML String Translation logs its own housekeeping (status recomputes) with
+# error_log(); those lines carry no file path.
+NOISE='wp_version_check|wp_update_themes|wp_update_plugins|plugins_api|wordpress\.org|plugins/elementor/|plugins/elementor-pro/|\[Elementor Atomic Widgets\]|WPML String Translation: st_'
 check_log() {
   if grep -Ev "$NOISE" "$LOG" 2>/dev/null | grep -q .; then
     bad "debug.log con entradas ($1): $(grep -Ev "$NOISE" "$LOG" | head -3)"
@@ -66,6 +68,8 @@ CURL=(curl -s --max-time 60)
 # they are replaced by a check that the plugin degrades cleanly, rather than
 # silently skipped.
 HAS_ABILITIES=$("$WP" eval 'echo function_exists("wp_register_ability") ? "1" : "0";')
+# Real WPML and String Translation add their own MCP tools.
+REAL_WPML_ST=$("$WP" eval 'echo (class_exists("SitePress") && defined("WPML_ST_VERSION")) ? "1" : "0";' 2>/dev/null | tail -1)
 
 # Ids shift whenever the fixture changes; read them instead of assuming.
 POST_ID=$("$WP" eval 'echo get_option("wit_test_fixture")["post"];')
@@ -157,7 +161,9 @@ echo json_encode(array(
     "alt_block"   => substr_count($c1, "[EN] Foto del equipo") === 2, // block JSON + markup
     "meta_copiada"=> get_post_meta($p1, "_custom_technical", true) === "do-not-touch-me",
     "meta_interna"=> get_post_meta($p1, "_edit_lock", true) === "",
-    "destacada"   => (int) get_post_thumbnail_id($p1) === (int) get_post_thumbnail_id($f["post"]),
+    // The image in the language of the translation: with the real WPML,
+    // media has translations of its own; with the double it is the same.
+    "destacada"   => (int) get_post_thumbnail_id($p1) === (int) apply_filters("wpml_object_id", get_post_thumbnail_id($f["post"]), "attachment", true, "en"),
     "borrador"    => get_post($p1)->post_status === "draft",
     "bloques"     => count(array_filter(parse_blocks($c1), function ($b) { return $b["blockName"] !== null; })),
     "cats"        => $cats,
@@ -260,7 +266,7 @@ page() { # ruta, etiqueta, subcadena esperada
     ok "$2"
   fi
 
-  grep -Eo "(Warning|Notice|Fatal error): [^<]{0,110}" "$file" | head -3 | sed 's/^/      PHP: /'
+  grep -Eo "<b>(Warning|Notice|Fatal error)</b>: [^<]{0,110}" "$file" | head -3 | sed 's/^/      PHP: /'
 }
 page "admin.php?page=wpml-ia-translate"               "Dashboard"        "wit-dashboard"
 page "admin.php?page=wpml-ia-translate&target_lang=en&post_types%5B%5D=post&post_types%5B%5D=page" \
@@ -292,7 +298,7 @@ ajax() { # acción, etiqueta, datos extra…
   body=$("${CURL[@]}" -b "$JAR" -X POST "$HOST/wp-admin/admin-ajax.php" \
          -d "action=$action" -d "nonce=$NONCE" "$@")
   printf '%s' "$body" | grep -q '"success":true' && ok "$label" || bad "$label → $(printf '%s' "$body" | head -c 180)"
-  printf '%s' "$body" | grep -Eo "(Warning|Notice|Fatal error): [^<]{0,110}" | head -2 | sed 's/^/      PHP: /'
+  printf '%s' "$body" | grep -Eo "<b>(Warning|Notice|Fatal error)</b>: [^<]{0,110}" | head -2 | sed 's/^/      PHP: /'
 }
 ajax wit_test_connection          "wit_test_connection"          -d "provider=openai"
 ajax wit_fetch_models             "wit_fetch_models"             -d "provider=openai"
@@ -438,7 +444,7 @@ fi
 
 ( cd "$CLIENT_DIR" && timeout 180 node mcp-client.mjs "$HOST" admin admin "$POST_ID" ) > "$TEST_DIR/mcp-client.json" 2>&1
 
-python3 - "$TEST_DIR/mcp-client.json" "$(wc -l < "$AILOG")" <<'CHECK' | tee -a "$CHECKS" || FAIL=1
+python3 - "$TEST_DIR/mcp-client.json" "$(wc -l < "$AILOG")" "$REAL_WPML_ST" <<'CHECK' | tee -a "$CHECKS" || FAIL=1
 import json, os, sys
 raw = open(sys.argv[1]).read()
 try:
@@ -495,8 +501,10 @@ for key, label in labels:
 expected_tools = {"translation_overview", "list_posts", "post_translation_status", "prepare_translation", "save_translation",
                   "get_translation", "correct_translation", "publish_translation", "remove_translation", "site_settings",
                   "update_settings", "get_glossary", "update_glossary", "translation_history"}
+if len(sys.argv) > 3 and sys.argv[3].strip() == "1":
+    expected_tools |= {"strings_overview", "list_strings", "prepare_strings", "save_strings", "set_wpml_translation_mode"}
 if set(d.get("tools", [])) == expected_tools:
-    print("  \033[32m✓\033[0m las 14 herramientas expuestas, con sus nombres")
+    print(f"  \033[32m✓\033[0m las {len(expected_tools)} herramientas expuestas, con sus nombres")
 else:
     print(f"  \033[31m✗\033[0m herramientas: {d.get('tools')}"); bad += 1
 if d.get("saved_status") == "created" and d.get("prepared_strings", 0) > 0:
@@ -838,6 +846,105 @@ fi
 check_log "auditoría"
 
 # =============================================================================
+section "L. WPML real y String Translation"
+# =============================================================================
+REAL_WPML=$("$WP" eval 'echo class_exists("SitePress") ? "1" : "0";' 2>/dev/null | tail -1)
+if [ "$REAL_WPML" != "1" ]; then
+  if [ -n "${WIT_WPML_ZIP:-}" ]; then
+    bad "se pidió WPML real (WIT_WPML_ZIP) y no está activo"
+  else
+    # Optional by design: WPML is not free. CI runs it when the ZIPs are
+    # available in the repository.
+    echo "  (con el doble de WPML: pasa WIT_WPML_ZIP y WIT_WPML_ST_ZIP a setup.sh para probar contra WPML real)"
+  fi
+else
+  "$WP" eval-file "$FIXTURES/reset.php" >/dev/null
+  "$WP" eval '$s = get_option("wit_settings"); $s["mcp_enabled"] = true; $s["use_wpml_fields"] = true; update_option("wit_settings", $s, false);' >/dev/null
+  : > "$LOG"; : > "$AILOG"
+  for step in translate after-edit after-retranslate strings after-strings; do
+    "$WP" eval-file "$FIXTURES/wpml-native.php" "$step" > "$TEST_DIR/wpml-$step.json" 2>/dev/null
+  done
+
+  python3 - "$TEST_DIR" "$HAS_ABILITIES" <<'CHECK' | tee -a "$CHECKS" || FAIL=1
+import json, os, sys
+d = {}
+for step in ("translate", "after-edit", "after-retranslate", "strings", "after-strings"):
+    raw = open(os.path.join(sys.argv[1], "wpml-%s.json" % step)).read()
+    try:
+        part, _ = json.JSONDecoder().raw_decode(raw[raw.index('{'):])
+        d.update(part)
+    except Exception:
+        print(f"  \033[31m✗\033[0m paso «{step}» sin JSON:\n" + raw[-1500:]); sys.exit(1)
+mcp = sys.argv[2] == "1"
+bad = 0
+def check(key, label, needs_mcp=False):
+    global bad
+    if needs_mcp and not mcp:
+        return
+    ok = d.get(key) is True
+    print(("  \033[32m✓\033[0m " if ok else "  \033[31m✗\033[0m ") + label + ("" if ok else f" (={d.get(key, '<ausente>')!r})"))
+    if not ok:
+        bad += 1
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            print(f"::error title=L. WPML real::{label}")
+check("real_wpml", "WPML real activo")
+check("st", "String Translation activo")
+print("  — WPML sabe de nuestras traducciones —")
+check("translated", "se traduce un post")
+check("wpml_recorded_complete", "WPML la registra como completa (antes no tenía ningún estado)")
+check("wpml_flags_needs_update", "al editar el original WPML la marca «necesita actualización»")
+check("plugin_says_outdated", "y el plugin la ve desactualizada")
+check("retranslated", "se vuelve a traducir")
+check("wpml_current_again", "WPML vuelve a darla por completa")
+print("  — campos y taxonomías según WPML —")
+check("field_translate_set", "se configura un campo en WPML como «Traducir»")
+check("wpml_field_translated", "ese campo se traduce aunque no esté en la lista del plugin")
+check("field_ignore_set", "se configura otro como «No traducir»")
+check("wpml_ignored_field_not_copied", "ese no se copia a la traducción")
+check("post_format_not_translated_in_wpml", "WPML no traduce los formatos de entrada")
+check("shared_taxonomy_same_term", "la traducción usa el mismo formato, sin crear términos que WPML no conoce")
+print("  — ajustes de WPML por MCP —")
+check("mcp_wpml_tool_registered", "la herramienta existe con WPML real", needs_mcp=True)
+check("mcp_post_type_mode", "cambiar un tipo a «mostrar como traducido»", needs_mcp=True)
+check("mcp_post_type_mode_back", "y devolverlo a «traducir»", needs_mcp=True)
+check("mcp_field_mode", "cambiar el modo de un campo", needs_mcp=True)
+check("mcp_bad_mode_refused", "un modo de campo para un tipo de contenido se rechaza", needs_mcp=True)
+check("site_settings_sees_real_wpml", "site_settings informa de WPML real y su Translation Management", needs_mcp=True)
+print("  — cadenas de String Translation —")
+check("registered", "cadenas de un tema y un texto de administración registradas")
+check("pending_es", "las 5 del tema (en inglés) están pendientes de traducir al español")
+check("own_language_not_listed", "una cadena no aparece como pendiente en su propio idioma")
+check("api_saved_4", "por la API se guardan 4")
+check("api_rejects_broken_placeholder", "y se rechaza la que perdió su %d")
+check("api_broken_not_saved", "sin guardarla")
+check("api_plain", "cadena simple traducida")
+check("api_placeholders", "%1$s y %2$s conservados")
+check("api_html_intact", "el enlace de una cadena con HTML intacto")
+check("api_placeholder_node_untouched", "un <span> que solo contiene %s no se manda a traducir")
+check("api_requests_made", "por la API sí se llama al proveedor")
+check("strings_logged", "queda en el historial")
+check("mcp_prepare", "MCP: prepare_strings devuelve el texto de administración", needs_mcp=True)
+check("mcp_saved", "MCP: save_strings lo guarda", needs_mcp=True)
+check("mcp_value", "MCP: con el texto del chat", needs_mcp=True)
+check("mcp_rejects_lost_placeholder", "MCP: una respuesta del chat sin %2$s se rechaza", needs_mcp=True)
+check("mcp_no_api_calls", "MCP: ni una llamada a la API", needs_mcp=True)
+check("mcp_overview", "MCP: strings_overview ve la carpeta de idiomas escribible", needs_mcp=True)
+check("files_written", "String Translation escribe sus ficheros de traducción")
+sys.exit(1 if bad else 0)
+CHECK
+
+  # What a visitor sees: the theme string, translated, on a real request.
+  DEMO=$("$WP" eval 'wp_set_current_user(1); $p = get_page_by_path("wit-demo-cadenas"); echo $p ? $p->ID : wp_insert_post(array("post_title" => "Demo cadenas", "post_name" => "wit-demo-cadenas", "post_type" => "page", "post_status" => "publish", "post_content" => "[wit_demo]"));' 2>/dev/null | tail -1)
+  FRONT=$("${CURL[@]}" -L "$HOST/wit-demo-cadenas/")
+  grep -q '<span id="wit-g">\[ES\] Leave a reply</span>' <<< "$FRONT" \
+    && ok "en la web, la cadena del tema sale traducida (gettext servido por String Translation)" \
+    || bad "en la web la cadena del tema no sale traducida: $(grep -o '<span id="wit-g">[^<]*' <<< "$FRONT")"
+  page "admin.php?page=wpml-ia-translate-strings&wit_lang=es&wit_status=all" "Pantalla Cadenas" "wit-strings-table"
+  "$WP" post delete "$DEMO" --force >/dev/null 2>&1
+  check_log "wpml real"
+fi
+
+# =============================================================================
 section "H. Guardado de ajustes por el formulario real"
 # =============================================================================
 : > "$LOG"
@@ -895,8 +1002,9 @@ update_option("wit_settings", $s, false);' >/dev/null
 # otherwise look exactly like one that passed.
 if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
   el_version=$("$WP" eval 'echo defined("ELEMENTOR_VERSION") ? ELEMENTOR_VERSION : "ninguno";' 2>/dev/null | tail -1)
-  printf '::notice title=Resumen de integración::WordPress %s · Elementor %s · Abilities API %s · %s comprobaciones correctas, %s fallidas\n' \
-    "$("$WP" core version 2>/dev/null)" "$el_version" "$([ "$HAS_ABILITIES" = "1" ] && echo sí || echo no)" \
+  wpml_kind=$("$WP" eval 'echo class_exists("SitePress") ? "WPML " . ICL_SITEPRESS_VERSION . (defined("WPML_ST_VERSION") ? " + ST " . WPML_ST_VERSION : "") : "doble de WPML";' 2>/dev/null | tail -1)
+  printf '::notice title=Resumen de integración::WordPress %s · %s · Elementor %s · Abilities API %s · %s comprobaciones correctas, %s fallidas\n' \
+    "$("$WP" core version 2>/dev/null)" "$wpml_kind" "$el_version" "$([ "$HAS_ABILITIES" = "1" ] && echo sí || echo no)" \
     "$(grep -c '✓' "$CHECKS")" "$(grep -c '✗' "$CHECKS")"
 fi
 

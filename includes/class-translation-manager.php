@@ -168,6 +168,7 @@ class WIT_Translation_Manager {
                     }
 
                     WIT_Translation_Status::mark($post_id, $existing_translation_id);
+                    WIT_WPML_Native::record_translation($existing_translation_id);
                     $this->log_translation($post_id, $target_language, 'success', __('Traducción actualizada', 'wpml-imagina-translate'));
 
                     return array(
@@ -203,6 +204,10 @@ class WIT_Translation_Manager {
                 }
 
                 WIT_Translation_Status::mark($post_id, $new_post_id);
+                // Created before it could be linked, so WPML never recorded it:
+                // without this its dashboard showed no status, and it never
+                // flagged the translation when the original changed.
+                WIT_WPML_Native::record_translation($new_post_id);
                 $this->log_translation($post_id, $target_language, 'success', __('Traducción creada', 'wpml-imagina-translate'));
 
                 return array(
@@ -247,7 +252,15 @@ class WIT_Translation_Manager {
         }
 
         $meta_fields = array_filter(array_map('trim', explode(',', $this->settings['meta_fields_list'])));
-        $values      = array();
+        $explicit    = array_flip($meta_fields);
+
+        // With WPML: also every field WPML is configured to translate — by the
+        // site, or by the wpml-config.xml of Yoast, Rank Math, ACF and the rest.
+        if (!empty($this->settings['use_wpml_fields'])) {
+            $meta_fields = array_unique(array_merge($meta_fields, WIT_WPML_Native::fields_to_translate($post_id)));
+        }
+
+        $values = array();
 
         foreach ($meta_fields as $meta_key) {
             // Elementor's own meta is handled by WIT_Elementor_Handler; letting
@@ -259,6 +272,14 @@ class WIT_Translation_Manager {
             $value = get_post_meta($post_id, $meta_key, true);
 
             if (!is_string($value) || trim($value) === '') {
+                continue;
+            }
+
+            // A field WPML says to translate can still hold an id, a URL or a
+            // serialized value; only text goes to the translator. Fields the
+            // user listed by hand are trusted as they always were.
+            if (!isset($explicit[$meta_key])
+                && (is_serialized($value) || !WIT_HTML_Translator::is_translatable(trim($value)) || preg_match('#^(https?://|/|\d+$)#', trim($value)))) {
                 continue;
             }
 
@@ -315,6 +336,42 @@ class WIT_Translation_Manager {
                 'created_at'  => current_time('mysql'),
             ),
             array('%d', '%s', '%s', '%s', '%s', '%s', '%s')
+        );
+    }
+
+    /**
+     * Record a batch of String Translation strings in the history.
+     *
+     * @param string $target_language
+     * @param int    $saved
+     * @param int    $failed
+     * @param array  $usage  From WIT_Translator_Engine::end_job_usage().
+     */
+    public function log_strings($target_language, $saved, $failed, array $usage) {
+        global $wpdb;
+
+        $wpdb->insert(
+            $wpdb->prefix . 'wit_translation_logs',
+            array(
+                'post_id'          => 0,
+                'source_lang'      => '',
+                'target_lang'      => (string) $target_language,
+                'ai_provider'      => WIT_Translator_Engine::is_external_active() ? 'mcp' : $this->settings['ai_provider'],
+                'status'           => $saved > 0 ? 'success' : 'error',
+                'message'          => sprintf(
+                    /* translators: 1: strings saved, 2: strings that failed */
+                    __('Cadenas de String Translation: %1$d traducidas, %2$d con error', 'wpml-imagina-translate'),
+                    (int) $saved,
+                    (int) $failed
+                ),
+                'input_tokens'     => (int) $usage['input_tokens'],
+                'output_tokens'    => (int) $usage['output_tokens'],
+                'strings_ai'       => (int) $usage['api'],
+                'strings_memory'   => (int) $usage['memory'],
+                'strings_glossary' => (int) $usage['glossary'],
+                'created_at'       => current_time('mysql'),
+            ),
+            array('%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%d', '%d', '%s')
         );
     }
 

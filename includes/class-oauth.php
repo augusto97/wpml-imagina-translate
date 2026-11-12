@@ -537,6 +537,12 @@ class WIT_OAuth {
         $can[] = __('Quitar traducciones cuando se lo pidas: despublicarlas o enviarlas a la papelera (recuperables; nunca se borran del todo)', 'wpml-imagina-translate');
         if (current_user_can('manage_options')) {
             $can[] = __('Editar el glosario y los ajustes de traducción (memoria, campos a traducir)', 'wpml-imagina-translate');
+            if (class_exists('WIT_Strings') && WIT_Strings::is_available()) {
+                $can[] = __('Traducir las cadenas de WPML String Translation (textos del tema, plugins y widgets)', 'wpml-imagina-translate');
+            }
+            if (class_exists('WIT_WPML_Native') && WIT_WPML_Native::is_active()) {
+                $can[] = __('Cambiar qué tipos de contenido y campos traduce WPML, cuando se lo pidas', 'wpml-imagina-translate');
+            }
         }
 
         status_header(200);
